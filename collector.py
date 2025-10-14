@@ -196,20 +196,20 @@ class GarminCollector:
                 
                 # Get detailed activity data
                 try:
-                    activity_details = api.get_activity(activity_id)
+                    activity_details = api.get_activity_details(activity_id)
                     
-                    # Extract key data
+                    # Extract key data (matching working version field names)
                     activity_data = {
                         'activity_id': activity_id,
                         'date': target_date,
-                        'activity_name': activity.get('activityName', ''),
-                        'activity_type': activity.get('activityType', {}).get('typeKey', ''),
-                        'start_time_local': activity.get('startTimeLocal'),
-                        'duration_seconds': activity.get('elapsedDuration'),
-                        'distance_meters': activity.get('distance'),
-                        'elevation_gain': activity.get('elevationGain'),
-                        'average_hr': activity.get('averageHR'),
-                        'max_hr': activity.get('maxHR'),
+                        'activity_name': activity.get('activityName', 'Unknown Activity'),
+                        'activity_type': activity.get('activityType', 'unknown'),
+                        'start_time_local': activity.get('startTimeLocal', ''),
+                        'duration_seconds': activity.get('duration', 0),
+                        'distance_meters': activity.get('distance', 0),
+                        'elevation_gain': activity.get('elevationGain', 0),
+                        'average_hr': activity.get('averageHR', 0),
+                        'max_hr': activity.get('maxHR', 0),
                         'heart_rate_series': [],
                         'breathing_rate_series': [],
                         'trimp_data': {},
@@ -238,52 +238,185 @@ class GarminCollector:
             logger.error(f"Error collecting activities for {target_date}: {e}")
             return []
     
+    def detect_hr_and_timestamp_positions(self, activity_details: Dict) -> tuple:
+        """
+        Detect HR and timestamp positions using metricDescriptors from activity details.
+        Adapted from the working version in jobs.py.
+        """
+        if not activity_details:
+            return None, None
+        
+        # Get metricDescriptors from activity details
+        metric_descriptors = activity_details.get('metricDescriptors', [])
+        if not metric_descriptors:
+            logger.warning("No metricDescriptors found in activity details")
+            return None, None
+        
+        logger.info(f"Found {len(metric_descriptors)} metric descriptors")
+        
+        # Find HR and timestamp positions using the key
+        hr_position = None
+        ts_position = None
+        
+        for descriptor in metric_descriptors:
+            metrics_index = descriptor.get('metricsIndex')
+            key = descriptor.get('key')
+            unit = descriptor.get('unit', {})
+            unit_key = unit.get('key', 'unknown')
+            factor = unit.get('factor', 1.0)
+            
+            logger.info(f"Index {metrics_index}: {key} ({unit_key}, factor={factor})")
+            
+            # Look for heart rate data
+            if key == 'directHeartRate':
+                hr_position = metrics_index
+                logger.info(f"Found HR at position {hr_position} (unit: {unit_key}, factor: {factor})")
+            
+            # Look for timestamp data
+            elif key == 'directTimestamp':
+                ts_position = metrics_index
+                logger.info(f"Found timestamp at position {ts_position} (unit: {unit_key}, factor: {factor})")
+        
+        if hr_position is None:
+            logger.warning("No directHeartRate found in metricDescriptors")
+        
+        if ts_position is None:
+            logger.warning("No directTimestamp found in metricDescriptors")
+        
+        return hr_position, ts_position
+
+    def detect_breathing_rate_position(self, activity_details: Dict) -> Optional[int]:
+        """
+        Detect breathing rate position in activity metrics.
+        Adapted from the working version in jobs.py.
+        """
+        logger.info("Analyzing activity details for breathing rate")
+        
+        # Get metric descriptors
+        metric_descriptors = activity_details.get('metricDescriptors', [])
+        if not metric_descriptors:
+            logger.warning("No metricDescriptors found")
+            return None
+        
+        # Find breathing rate position
+        breathing_position = None
+        for descriptor in metric_descriptors:
+            metrics_index = descriptor.get('metricsIndex')
+            key = descriptor.get('key')
+            
+            if key == 'directRespirationRate':
+                breathing_position = metrics_index
+                logger.info(f"Found breathing rate at position {breathing_position}")
+                break
+        
+        if breathing_position is None:
+            logger.warning("No directRespirationRate found in metricDescriptors")
+        
+        return breathing_position
+
     def extract_heart_rate_series(self, activity_details: Dict) -> List[List]:
-        """Extract heart rate series from activity details."""
-        # This is a simplified version - you may need to adapt based on your specific needs
+        """Extract heart rate series from activity details using sophisticated logic from working version."""
         hr_series = []
         
         if 'activityDetailMetrics' in activity_details:
-            metrics = activity_details['activityDetailMetrics']
-            if 'metricDescriptors' in metrics and 'metrics' in metrics:
-                # Find heart rate position
-                hr_pos = None
-                for descriptor in metrics['metricDescriptors']:
-                    if descriptor.get('key') == 'directHeartRate':
-                        hr_pos = descriptor.get('metricsIndex')
-                        break
+            activity_metrics = activity_details['activityDetailMetrics']
+            if activity_metrics:
+                logger.info(f"Found activityDetailMetrics with {len(activity_metrics)} entries")
                 
-                if hr_pos is not None and 'metrics' in metrics:
-                    # Extract heart rate data
-                    for metric in metrics['metrics']:
-                        if len(metric) > hr_pos:
-                            timestamp = metric[0]  # Assuming first column is timestamp
-                            hr_value = metric[hr_pos]
-                            hr_series.append([timestamp, hr_value])
+                # Use the sophisticated HR detection function
+                hr_pos, ts_pos = self.detect_hr_and_timestamp_positions(activity_details)
+                
+                if hr_pos is not None and ts_pos is not None:
+                    logger.info(f"Selected HR position {hr_pos}, Timestamp position {ts_pos}")
+                    
+                    # Get the factor for HR values from metricDescriptors
+                    hr_factor = 1.0
+                    for descriptor in activity_details.get('metricDescriptors', []):
+                        if descriptor.get('key') == 'directHeartRate':
+                            hr_factor = descriptor.get('unit', {}).get('factor', 1.0)
+                            logger.info(f"Using HR factor: {hr_factor}")
+                            break
+                    
+                    # Extract HR time series with filtering
+                    hr_values_checked = 0
+                    hr_values_filtered = 0
+                    
+                    # Get user's HR parameters for filtering (we'll use reasonable defaults)
+                    max_hr = 200  # Default max HR for filtering
+                    
+                    for entry in activity_metrics:
+                        if 'metrics' in entry and len(entry['metrics']) > max(hr_pos, ts_pos):
+                            metrics = entry['metrics']
+                            timestamp = metrics[ts_pos]
+                            hr_value = metrics[hr_pos]
+                            
+                            if timestamp is not None and hr_value is not None:
+                                hr_values_checked += 1
+                                
+                                # Apply the factor to get the actual HR value
+                                actual_hr_value = hr_value * hr_factor
+                                
+                                # Log first few HR values for debugging
+                                if hr_values_checked <= 5:
+                                    logger.info(f"Sample HR value {hr_values_checked}: raw={hr_value}, actual={actual_hr_value} (factor={hr_factor})")
+                                
+                                # Skip HR readings above max HR (likely sensor artifacts)
+                                if actual_hr_value > max_hr:
+                                    if hr_values_checked <= 10:  # Log first 10 filtered values
+                                        logger.info(f"Filtering HR reading {actual_hr_value} above max HR {max_hr}")
+                                    hr_values_filtered += 1
+                                    continue
+                                
+                                hr_series.append([timestamp, int(actual_hr_value)])
+                    
+                    logger.info(f"Checked {hr_values_checked} HR values, filtered {hr_values_filtered}, extracted {len(hr_series)}")
+                else:
+                    logger.warning("Could not find HR and timestamp positions")
+            else:
+                logger.warning("No activityDetailMetrics data")
+        else:
+            logger.warning("No activityDetailMetrics in activity details")
         
         return hr_series
     
     def extract_breathing_rate_series(self, activity_details: Dict) -> List[List]:
-        """Extract breathing rate series from activity details."""
+        """Extract breathing rate series from activity details using sophisticated logic."""
         breathing_series = []
         
         if 'activityDetailMetrics' in activity_details:
-            metrics = activity_details['activityDetailMetrics']
-            if 'metricDescriptors' in metrics and 'metrics' in metrics:
-                # Find breathing rate position
-                breathing_pos = None
-                for descriptor in metrics['metricDescriptors']:
-                    if descriptor.get('key') == 'directRespirationRate':
-                        breathing_pos = descriptor.get('metricsIndex')
-                        break
+            activity_metrics = activity_details['activityDetailMetrics']
+            if activity_metrics:
+                # Detect breathing rate position
+                breathing_pos = self.detect_breathing_rate_position(activity_details)
+                hr_pos, ts_pos = self.detect_hr_and_timestamp_positions(activity_details)
                 
-                if breathing_pos is not None and 'metrics' in metrics:
-                    # Extract breathing rate data
-                    for metric in metrics['metrics']:
-                        if len(metric) > breathing_pos:
-                            timestamp = metric[0]  # Assuming first column is timestamp
-                            breathing_value = metric[breathing_pos]
-                            breathing_series.append([timestamp, breathing_value])
+                if breathing_pos is not None and ts_pos is not None:
+                    logger.info(f"Selected breathing rate position {breathing_pos}")
+                    
+                    breathing_values_checked = 0
+                    
+                    for entry in activity_metrics:
+                        if 'metrics' in entry and len(entry['metrics']) > max(breathing_pos, ts_pos):
+                            metrics = entry['metrics']
+                            timestamp = metrics[ts_pos]
+                            breathing_value = metrics[breathing_pos]
+                            
+                            if timestamp is not None and breathing_value is not None:
+                                breathing_values_checked += 1
+                                
+                                # Log first few breathing values for debugging
+                                if breathing_values_checked <= 5:
+                                    logger.info(f"Sample breathing value {breathing_values_checked}: {breathing_value}")
+                                
+                                breathing_series.append([timestamp, float(breathing_value)])
+                    
+                    logger.info(f"Checked {breathing_values_checked} breathing values, extracted {len(breathing_series)}")
+                else:
+                    logger.warning("Could not find breathing rate and timestamp positions")
+            else:
+                logger.warning("No activityDetailMetrics data")
+        else:
+            logger.warning("No activityDetailMetrics in activity details")
         
         return breathing_series
     
