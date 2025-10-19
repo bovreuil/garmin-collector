@@ -145,3 +145,6 @@ dmypy.json
 
 # Ignore folder for local testing
 ignore/
+.DS_Store
+env.bak
+garminconnect/.DS_Store
