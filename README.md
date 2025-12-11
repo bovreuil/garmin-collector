@@ -8,7 +8,7 @@ The garmin-collector runs independently from the rehab-platform and handles all 
 
 1. Polls the rehab-platform server for pending jobs
 2. Connects to Garmin Connect using stored credentials
-3. Fetches heart rate and activity data for requested dates
+3. Fetches heart rate, stress, body battery, and activity data for requested dates
 4. Uploads the collected data back to the server
 
 ## Setup
@@ -68,10 +68,21 @@ When a job is found, the collector:
 
 1. Updates the job status to "running"
 2. Connects to Garmin Connect
-3. Fetches heart rate data for the target date
-4. Fetches activity data for the target date
-5. Uploads the collected data to the server
-6. Updates the job status to "completed" or "failed"
+3. Fetches heart rate data for the target date (2-minute intervals)
+4. Fetches all-day stress and body battery data for the target date (3-minute intervals, via `get_all_day_stress()` endpoint)
+5. Fetches activity data for the target date (HR, breathing rate, metadata)
+6. Uploads the collected data to the server
+7. Updates the job status to "completed" or "failed"
+
+**Data Collection Details**:
+- **Heart Rate**: Daily whole-day data at 2-minute intervals
+- **Stress**: Daily stress level time series at 3-minute intervals (typically ~480 points per day)
+- **Body Battery**: Daily body battery level and status time series at 3-minute intervals (typically ~480 points per day)
+- **Activities**: Per-activity data including HR time series, breathing rate, and metadata
+
+**Error Handling**:
+- If stress/body battery data collection fails, the collector logs a warning but continues processing heart rate and activity data
+- Collection failures don't block the upload of other successfully collected data
 
 ### Data Upload
 
@@ -122,12 +133,12 @@ This collector is designed to run on a local machine (like your Windows 11 mini-
    Create `.env` file:
    ```env
    # Garmin Connect credentials
-   GARMIN_EMAIL=peter.buckney@gmail.com
-   GARMIN_PASSWORD=I12garmin
+   GARMIN_EMAIL=
+   GARMIN_PASSWORD=
 
    # Rehab Platform server configuration (Render)
-   REHAB_PLATFORM_URL=https://rehab-platform-web.onrender.com
-   SHARED_SECRET=c4a5c65106c19203d3875467f67c5728
+   REHAB_PLATFORM_URL=
+   SHARED_SECRET=
 
    # Polling configuration
    POLL_INTERVAL=30
@@ -199,6 +210,7 @@ python collector.py --poll >> collector.log 2>&1
 ### Garmin API Issues
 
 * Garmin may rate limit requests - the collector includes basic error handling
+* Stress and body battery collection failures are logged as warnings but don't block other data collection
 * If you encounter frequent authentication failures, Garmin may have flagged your IP
 * Consider running the collector from a different network if issues persist
 
@@ -225,7 +237,7 @@ python collector.py --poll >> collector.log 2>&1
 
 ## Production Architecture
 
-**Current Production Setup (October 2025)**:
+**Current Production Setup**:
 
 ```
 User (laptop/phone) → Render Web App → Render PostgreSQL
