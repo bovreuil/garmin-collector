@@ -133,6 +133,17 @@ class GarminCollector:
             logger.info(f"Fetching activities for {target_date}")
             activities = self.collect_activities_for_date(api, target_date)
             
+            # Get all-day stress data (includes stress + body battery series)
+            logger.info(f"Fetching all-day stress data for {target_date}")
+            all_day_stress_data = None
+            try:
+                all_day_stress_data = api.get_all_day_stress(target_date)
+                if all_day_stress_data:
+                    logger.info(f"Collected all-day stress data: {len(all_day_stress_data.get('stressValuesArray', []))} stress points, {len(all_day_stress_data.get('bodyBatteryValuesArray', []))} body battery points")
+            except Exception as e:
+                logger.warning(f"Failed to fetch all-day stress data: {e}")
+                # Don't fail the whole collection if stress data is unavailable
+            
             # Prepare data for upload to server
             result_data = {
                 'success': True,
@@ -141,6 +152,7 @@ class GarminCollector:
                     'date': target_date,
                     'heartRateValues': hr_series
                 },
+                'all_day_stress_data': all_day_stress_data,  # Includes stress + body battery with catalogs
                 'activities': activities,
                 'message': f"Successfully collected data for {target_date}"
             }
