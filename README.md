@@ -83,8 +83,8 @@ When a job is found, the collector:
 - **Stress**: Daily stress level time series at 3-minute intervals (typically ~480 points per day)
 - **Body Battery**: Daily body battery level and status time series at 3-minute intervals (typically ~480 points per day)
 - **Resting Heart Rate**: Daily resting heart rate value
-- **HRV (Heart Rate Variability)**: Daily HRV summary data including weekly averages
-- **Respiration**: Daily respiration metrics including average sleep respiration values
+- **HRV (Heart Rate Variability)**: Daily HRV summary data including weekly averages (large hrvReadings array removed to reduce payload size)
+- **Respiration**: Daily respiration metrics including average sleep respiration values (large respirationValuesArray removed to reduce payload size, respirationAveragesValuesArray retained)
 - **Training Readiness**: Daily training readiness score
 - **Activities**: Per-activity data including HR time series, breathing rate, and metadata
 
@@ -93,6 +93,7 @@ When a job is found, the collector:
 - If health metrics (resting HR, HRV, respiration, training readiness) collection fails, the collector logs a warning but continues processing
 - HRV data may not be available for all dates (API returns 204 No Content) - this is expected and handled gracefully
 - Collection failures don't block the upload of other successfully collected data
+- **Older Data Handling**: For dates older than ~6 months, Garmin may return `None` instead of empty lists for some fields. The collector handles this gracefully by converting `None` to empty lists and validating data types before processing. If data appears missing, you may need to "reload chart" in the Garmin Connect mobile app first to make it available via API.
 
 ### Data Upload
 
