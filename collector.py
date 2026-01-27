@@ -178,7 +178,15 @@ class GarminCollector:
             try:
                 respiration_data = api.get_respiration_data(target_date)
                 if respiration_data:
-                    logger.info(f"Collected respiration data for {target_date}")
+                    # Remove respirationValuesArray to reduce payload size (can be very large)
+                    # Keep respirationAveragesValuesArray as it's needed
+                    if isinstance(respiration_data, dict) and 'respirationValuesArray' in respiration_data:
+                        respiration_values_count = len(respiration_data['respirationValuesArray']) if isinstance(respiration_data['respirationValuesArray'], list) else 0
+                        respiration_data = respiration_data.copy()  # Create a copy to avoid modifying the original
+                        del respiration_data['respirationValuesArray']
+                        logger.info(f"Collected respiration data for {target_date} (removed {respiration_values_count} values from respirationValuesArray)")
+                    else:
+                        logger.info(f"Collected respiration data for {target_date}")
             except Exception as e:
                 logger.warning(f"Failed to fetch respiration data: {e}")
             
