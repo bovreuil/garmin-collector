@@ -114,6 +114,15 @@ class GarminCollector:
             api = Garmin(self.garmin_email, self.garmin_password)
             api.login()
             logger.info(f"Connected to Garmin with email {self.garmin_email}")
+        except Exception as e:
+            logger.error(f"Error connecting to Garmin: {e}", exc_info=True)
+            return {
+                'success': False,
+                'message': f"Error connecting to Garmin: {str(e)}",
+                'data_found': False
+            }
+        
+        try:
             
             # Get heart rate data
             logger.info(f"Fetching heart rate data for {target_date}")
@@ -127,6 +136,13 @@ class GarminCollector:
                 }
             
             hr_series = heart_rate_data['heartRateValues']
+            # Handle None values for older data (Garmin may return None instead of empty lists)
+            if hr_series is None:
+                hr_series = []
+            elif not isinstance(hr_series, list):
+                logger.warning(f"heartRateValues is not a list: {type(hr_series)}, converting to empty list")
+                hr_series = []
+            
             logger.info(f"Collected {len(hr_series)} heart rate points")
             
             # Get activities for the date
@@ -139,7 +155,12 @@ class GarminCollector:
             try:
                 all_day_stress_data = api.get_all_day_stress(target_date)
                 if all_day_stress_data:
-                    logger.info(f"Collected all-day stress data: {len(all_day_stress_data.get('stressValuesArray', []))} stress points, {len(all_day_stress_data.get('bodyBatteryValuesArray', []))} body battery points")
+                    # Handle None values for older data (Garmin may return None instead of empty lists)
+                    stress_array = all_day_stress_data.get('stressValuesArray') or []
+                    body_battery_array = all_day_stress_data.get('bodyBatteryValuesArray') or []
+                    stress_count = len(stress_array) if isinstance(stress_array, list) else 0
+                    body_battery_count = len(body_battery_array) if isinstance(body_battery_array, list) else 0
+                    logger.info(f"Collected all-day stress data: {stress_count} stress points, {body_battery_count} body battery points")
             except Exception as e:
                 logger.warning(f"Failed to fetch all-day stress data: {e}")
                 # Don't fail the whole collection if stress data is unavailable
@@ -162,7 +183,8 @@ class GarminCollector:
                 if hrv_data:
                     # Remove hrvReadings array to reduce payload size (can be very large)
                     if isinstance(hrv_data, dict) and 'hrvReadings' in hrv_data:
-                        hrv_readings_count = len(hrv_data['hrvReadings']) if isinstance(hrv_data['hrvReadings'], list) else 0
+                        hrv_readings = hrv_data.get('hrvReadings')
+                        hrv_readings_count = len(hrv_readings) if isinstance(hrv_readings, list) else 0
                         hrv_data = hrv_data.copy()  # Create a copy to avoid modifying the original
                         del hrv_data['hrvReadings']
                         logger.info(f"Collected HRV data for {target_date} (removed {hrv_readings_count} readings from array)")
@@ -181,7 +203,8 @@ class GarminCollector:
                     # Remove respirationValuesArray to reduce payload size (can be very large)
                     # Keep respirationAveragesValuesArray as it's needed
                     if isinstance(respiration_data, dict) and 'respirationValuesArray' in respiration_data:
-                        respiration_values_count = len(respiration_data['respirationValuesArray']) if isinstance(respiration_data['respirationValuesArray'], list) else 0
+                        respiration_values = respiration_data.get('respirationValuesArray')
+                        respiration_values_count = len(respiration_values) if isinstance(respiration_values, list) else 0
                         respiration_data = respiration_data.copy()  # Create a copy to avoid modifying the original
                         del respiration_data['respirationValuesArray']
                         logger.info(f"Collected respiration data for {target_date} (removed {respiration_values_count} values from respirationValuesArray)")
@@ -221,11 +244,15 @@ class GarminCollector:
             return result_data
             
         except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
             logger.error(f"Error collecting data for {target_date}: {e}")
+            logger.error(f"Traceback: {error_traceback}")
             return {
                 'success': False,
                 'message': f"Error collecting data: {str(e)}",
-                'data_found': False
+                'data_found': False,
+                'traceback': error_traceback
             }
     
     def collect_activities_for_date(self, api: Garmin, target_date: str) -> List[Dict]:
@@ -253,6 +280,16 @@ class GarminCollector:
             
             if not activities:
                 logger.info(f"No activities found for {target_date}")
+                return []
+            
+            # Handle None values - convert to empty list
+            if activities is None:
+                logger.info(f"Activities is None for {target_date}")
+                return []
+            
+            # Ensure activities is a list
+            if not isinstance(activities, list):
+                logger.warning(f"Activities is not a list: {type(activities)}, treating as empty")
                 return []
             
             logger.info(f"Found {len(activities)} activities for {target_date}")
@@ -293,6 +330,12 @@ class GarminCollector:
                         hr_series = self.extract_heart_rate_series(activity_details)
                         breathing_series = self.extract_breathing_rate_series(activity_details)
                         
+                        # Ensure series are lists (handle None values)
+                        if hr_series is None:
+                            hr_series = []
+                        if breathing_series is None:
+                            breathing_series = []
+                        
                         activity_data['heart_rate_series'] = hr_series
                         activity_data['breathing_rate_series'] = breathing_series
                         
@@ -322,6 +365,15 @@ class GarminCollector:
         metric_descriptors = activity_details.get('metricDescriptors', [])
         if not metric_descriptors:
             logger.warning("No metricDescriptors found in activity details")
+            return None, None
+        
+        # Handle None values
+        if metric_descriptors is None:
+            logger.warning("metricDescriptors is None")
+            return None, None
+        
+        if not isinstance(metric_descriptors, list):
+            logger.warning(f"metricDescriptors is not a list: {type(metric_descriptors)}")
             return None, None
         
         logger.info(f"Found {len(metric_descriptors)} metric descriptors")
@@ -393,6 +445,13 @@ class GarminCollector:
         if 'activityDetailMetrics' in activity_details:
             activity_metrics = activity_details['activityDetailMetrics']
             if activity_metrics:
+                # Handle None values
+                if activity_metrics is None:
+                    logger.warning("activityDetailMetrics is None")
+                    return []
+                if not isinstance(activity_metrics, list):
+                    logger.warning(f"activityDetailMetrics is not a list: {type(activity_metrics)}")
+                    return []
                 logger.info(f"Found activityDetailMetrics with {len(activity_metrics)} entries")
                 
                 # Use the sophisticated HR detection function
@@ -417,7 +476,7 @@ class GarminCollector:
                     max_hr = 200  # Default max HR for filtering
                     
                     for entry in activity_metrics:
-                        if 'metrics' in entry and len(entry['metrics']) > max(hr_pos, ts_pos):
+                        if 'metrics' in entry and entry.get('metrics') is not None and isinstance(entry['metrics'], list) and len(entry['metrics']) > max(hr_pos, ts_pos):
                             metrics = entry['metrics']
                             timestamp = metrics[ts_pos]
                             hr_value = metrics[hr_pos]
@@ -468,7 +527,7 @@ class GarminCollector:
                     breathing_values_checked = 0
                     
                     for entry in activity_metrics:
-                        if 'metrics' in entry and len(entry['metrics']) > max(breathing_pos, ts_pos):
+                        if 'metrics' in entry and entry.get('metrics') is not None and isinstance(entry['metrics'], list) and len(entry['metrics']) > max(breathing_pos, ts_pos):
                             metrics = entry['metrics']
                             timestamp = metrics[ts_pos]
                             breathing_value = metrics[breathing_pos]
