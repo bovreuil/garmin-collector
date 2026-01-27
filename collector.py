@@ -144,6 +144,47 @@ class GarminCollector:
                 logger.warning(f"Failed to fetch all-day stress data: {e}")
                 # Don't fail the whole collection if stress data is unavailable
             
+            # Get resting heart rate data
+            logger.info(f"Fetching resting heart rate data for {target_date}")
+            resting_hr_data = None
+            try:
+                resting_hr_data = api.get_rhr_day(target_date)
+                if resting_hr_data:
+                    logger.info(f"Collected resting heart rate data for {target_date}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch resting heart rate data: {e}")
+            
+            # Get HRV (Heart Rate Variability) data
+            logger.info(f"Fetching HRV data for {target_date}")
+            hrv_data = None
+            try:
+                hrv_data = api.get_hrv_data(target_date)
+                if hrv_data:
+                    logger.info(f"Collected HRV data for {target_date}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch HRV data: {e}")
+                # HRV data may not be available for all dates (API returns 204 No Content)
+            
+            # Get respiration data
+            logger.info(f"Fetching respiration data for {target_date}")
+            respiration_data = None
+            try:
+                respiration_data = api.get_respiration_data(target_date)
+                if respiration_data:
+                    logger.info(f"Collected respiration data for {target_date}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch respiration data: {e}")
+            
+            # Get training readiness data
+            logger.info(f"Fetching training readiness data for {target_date}")
+            training_readiness_data = None
+            try:
+                training_readiness_data = api.get_training_readiness(target_date)
+                if training_readiness_data:
+                    logger.info(f"Collected training readiness data for {target_date}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch training readiness data: {e}")
+            
             # Prepare data for upload to server
             result_data = {
                 'success': True,
@@ -153,6 +194,10 @@ class GarminCollector:
                     'heartRateValues': hr_series
                 },
                 'all_day_stress_data': all_day_stress_data,  # Includes stress + body battery with catalogs
+                'resting_hr_data': resting_hr_data,
+                'hrv_data': hrv_data,
+                'respiration_data': respiration_data,
+                'training_readiness_data': training_readiness_data,
                 'activities': activities,
                 'message': f"Successfully collected data for {target_date}"
             }

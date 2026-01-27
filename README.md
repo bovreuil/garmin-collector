@@ -70,18 +70,28 @@ When a job is found, the collector:
 2. Connects to Garmin Connect
 3. Fetches heart rate data for the target date (2-minute intervals)
 4. Fetches all-day stress and body battery data for the target date (3-minute intervals, via `get_all_day_stress()` endpoint)
-5. Fetches activity data for the target date (HR, breathing rate, metadata)
-6. Uploads the collected data to the server
-7. Updates the job status to "completed" or "failed"
+5. Fetches resting heart rate data for the target date (via `get_rhr_day()` endpoint)
+6. Fetches HRV (Heart Rate Variability) data for the target date (via `get_hrv_data()` endpoint)
+7. Fetches respiration data for the target date (via `get_respiration_data()` endpoint)
+8. Fetches training readiness data for the target date (via `get_training_readiness()` endpoint)
+9. Fetches activity data for the target date (HR, breathing rate, metadata)
+10. Uploads the collected data to the server
+11. Updates the job status to "completed" or "failed"
 
 **Data Collection Details**:
 - **Heart Rate**: Daily whole-day data at 2-minute intervals
 - **Stress**: Daily stress level time series at 3-minute intervals (typically ~480 points per day)
 - **Body Battery**: Daily body battery level and status time series at 3-minute intervals (typically ~480 points per day)
+- **Resting Heart Rate**: Daily resting heart rate value
+- **HRV (Heart Rate Variability)**: Daily HRV summary data including weekly averages
+- **Respiration**: Daily respiration metrics including average sleep respiration values
+- **Training Readiness**: Daily training readiness score
 - **Activities**: Per-activity data including HR time series, breathing rate, and metadata
 
 **Error Handling**:
-- If stress/body battery data collection fails, the collector logs a warning but continues processing heart rate and activity data
+- If stress/body battery data collection fails, the collector logs a warning but continues processing other data
+- If health metrics (resting HR, HRV, respiration, training readiness) collection fails, the collector logs a warning but continues processing
+- HRV data may not be available for all dates (API returns 204 No Content) - this is expected and handled gracefully
 - Collection failures don't block the upload of other successfully collected data
 
 ### Data Upload
