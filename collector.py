@@ -160,7 +160,14 @@ class GarminCollector:
             try:
                 hrv_data = api.get_hrv_data(target_date)
                 if hrv_data:
-                    logger.info(f"Collected HRV data for {target_date}")
+                    # Remove hrvReadings array to reduce payload size (can be very large)
+                    if isinstance(hrv_data, dict) and 'hrvReadings' in hrv_data:
+                        hrv_readings_count = len(hrv_data['hrvReadings']) if isinstance(hrv_data['hrvReadings'], list) else 0
+                        hrv_data = hrv_data.copy()  # Create a copy to avoid modifying the original
+                        del hrv_data['hrvReadings']
+                        logger.info(f"Collected HRV data for {target_date} (removed {hrv_readings_count} readings from array)")
+                    else:
+                        logger.info(f"Collected HRV data for {target_date}")
             except Exception as e:
                 logger.warning(f"Failed to fetch HRV data: {e}")
                 # HRV data may not be available for all dates (API returns 204 No Content)
