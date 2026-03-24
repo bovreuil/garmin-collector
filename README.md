@@ -2,9 +2,20 @@
 
 This is a standalone service that polls the rehab-platform server for Garmin data collection jobs and fetches data from Garmin Connect.
 
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| This README | Setup, runtime behavior, deployment, troubleshooting |
+| [docs/INTEGRATION.md](docs/INTEGRATION.md) | Architecture vs rehab-platform, full HTTP + JSON contract, auth, operational notes |
+
+The integration guide is the reference for **machine-to-machine** calls (`GET /api/jobs/pending`, status updates, upload payload shape). Rehab-platform’s `app.py` is authoritative if anything diverges.
+
 ## Overview
 
-The garmin-collector runs independently from the rehab-platform and handles all Garmin API interactions. It:
+**garmin-collector** is a separate repository from [rehab-platform](https://github.com/bovreuil/rehab-platform) so Garmin API and token handling stay out of the main app. In production, Garmin often blocks cloud egress (e.g. Render); this service runs on a **trusted path** (such as a home mini-ITX) and **pushes** data to the platform over HTTPS.
+
+The garmin-collector runs independently and handles all Garmin API interactions. It:
 
 1. Polls the rehab-platform server for pending jobs
 2. Connects to Garmin Connect using stored credentials
@@ -38,11 +49,11 @@ GARMIN_PASSWORD=your_password
 REHAB_PLATFORM_URL=http://localhost:5001
 SHARED_SECRET=your_shared_secret_here
 
-# Polling configuration (seconds between polls)
+# Polling configuration (seconds between polls; production often ~30)
 POLL_INTERVAL=60
 ```
 
-**Important**: Make sure the `SHARED_SECRET` matches the one configured in the rehab-platform's `config.py` file.
+**Important**: `SHARED_SECRET` must match rehab-platform on both sides (e.g. `API_CONFIG['SHARED_SECRET']` / environment variables there and `SHARED_SECRET` here). Mismatches return **401 Unauthorized**.
 
 ### 3. Run the Collector
 
@@ -56,11 +67,7 @@ The collector will start polling the server every 60 seconds (or whatever you se
 
 ### Job Polling
 
-The collector periodically checks the rehab-platform server for pending jobs by calling:
-
-```
-GET /api/jobs/pending
-```
+The collector periodically checks the rehab-platform server for pending jobs by calling `GET /api/jobs/pending`. Jobs are ordered by oldest `created_at` first. Each job includes a **`target_date`** (`YYYY-MM-DD`): that calendar day (UK timezone semantics on the platform—see [docs/INTEGRATION.md](docs/INTEGRATION.md)) drives what Garmin data is fetched; storage uses the job’s `target_date`, not a date inside the JSON body.
 
 ### Data Collection
 
@@ -75,8 +82,10 @@ When a job is found, the collector:
 7. Fetches respiration data for the target date (via `get_respiration_data()` endpoint)
 8. Fetches training readiness data for the target date (via `get_training_readiness()` endpoint)
 9. Fetches activity data for the target date (HR, breathing rate, metadata)
-10. Uploads the collected data to the server
-11. Updates the job status to "completed" or "failed"
+10. Uploads the collected data to the server (`POST /api/jobs/{job_id}/data`)
+11. Updates the job status to `completed` or `failed` via `POST /api/jobs/{job_id}/status`
+
+A successful data upload **does not** mark the job complete on the server by itself; the collector must still call the status endpoint (see [docs/INTEGRATION.md](docs/INTEGRATION.md) §4).
 
 **Data Collection Details**:
 - **Heart Rate**: Daily whole-day data at 2-minute intervals
@@ -97,21 +106,17 @@ When a job is found, the collector:
 
 ### Data Upload
 
-Collected data is uploaded to the server via:
-
-```
-POST /api/jobs/{job_id}/data
-```
+Collected data is uploaded with `POST /api/jobs/{job_id}/data`. Optional or empty sections in the payload can let rehab-platform **preserve** existing day data when merging or backfilling; full field shapes and semantics are in [docs/INTEGRATION.md](docs/INTEGRATION.md) §5.
 
 ## API Endpoints
 
-The collector communicates with the rehab-platform using these endpoints:
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/jobs/pending` | Pending jobs (`collect_data`, etc.) |
+| `POST` | `/api/jobs/{job_id}/status` | `running` → `completed` or `failed` |
+| `POST` | `/api/jobs/{job_id}/data` | Upload JSON for that job’s `target_date` |
 
-* `GET /api/jobs/pending` - Get pending jobs
-* `POST /api/jobs/{job_id}/status` - Update job status
-* `POST /api/jobs/{job_id}/data` - Upload collected data
-
-All requests require authentication using the shared secret in the `Authorization: Bearer {secret}` header.
+All requests use **`Authorization: Bearer <SHARED_SECRET>`** (machine-to-machine; not browser cookies). Request/response bodies, `result` / `error_message` behavior, and activity rules are documented in [docs/INTEGRATION.md](docs/INTEGRATION.md).
 
 ## Deployment
 
@@ -234,7 +239,7 @@ python collector.py --poll >> collector.log 2>&1
 
 ### Production Environment Issues
 
-* **401 Unauthorized**: Check that `SHARED_SECRET` matches between collector and Render web service
+* **401 Unauthorized**: Align `SHARED_SECRET` with rehab-platform (`API_CONFIG` / env), base URL, and `Authorization: Bearer ...` spelling ([docs/INTEGRATION.md](docs/INTEGRATION.md) §3)
 * **Connection refused**: Verify `REHAB_PLATFORM_URL` is correct
 * **Task not starting**: Check Task Scheduler logs and ensure auto-login is configured
 
@@ -248,13 +253,15 @@ python collector.py --poll >> collector.log 2>&1
 
 ## Production Architecture
 
-**Current Production Setup**:
+**Current production setup** (matches [docs/INTEGRATION.md](docs/INTEGRATION.md) topology):
 
-```
+```text
 User (laptop/phone) → Render Web App → Render PostgreSQL
                                     ↑
 Mini-ITX Collector → Garmin Connect → Render API
 ```
+
+Admins create jobs from rehab-platform **`/data`** (`POST /collect-data`), which queues `background_jobs` with `job_type='collect_data'` and `status='pending'`.
 
 **Key Benefits**:
 - ✅ **No inbound connections** to home network
