@@ -196,6 +196,7 @@ Per-activity TRIMP is computed inside rehab-platform from `heart_rate_series` wh
 - **Platform URL:** Collector env often named like `REHAB_PLATFORM_URL` pointing at the public HTTPS origin (no trailing slash issues — use consistent URL building in collector code).
 - **Jobs creation:** Admins trigger collection from rehab-platform **`/data`** (`POST /collect-data`), which inserts `background_jobs` with `job_type='collect_data'` and `status='pending'`.
 - **Troubleshooting 401:** Align `SHARED_SECRET` and base URL; confirm `Authorization: Bearer ...` spelling.
+- **Garmin OAuth tokens:** The collector should persist Garth tokens on disk (see `GARMINTOKENS` in `env.example`) — typically a directory **inside the project clone** (e.g. `.garmin-tokens/`, gitignored) on each machine (dev MacBook vs prod mini-ITX). That avoids a full Garmin SSO login on every job and reduces **429** throttling on `sso.garmin.com`. Permissions on that directory should be restrictive (same idea as upstream python-garminconnect: treat like secrets).
 
 For full production checklist (Gunicorn workers, Dropbox, OAuth, etc.), see rehab-platform **OPERATIONS.md** — most of it applies only to the web app, not the collector.
 

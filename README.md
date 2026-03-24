@@ -8,6 +8,7 @@ This is a standalone service that polls the rehab-platform server for Garmin dat
 |----------|----------|
 | This README | Setup, runtime behavior, deployment, troubleshooting |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | Architecture vs rehab-platform, full HTTP + JSON contract, auth, operational notes |
+| [docs/plans/garmin-429-recovery.md](docs/plans/garmin-429-recovery.md) | Plan: Garmin SSO 429 / token-first login, collector follow-ups |
 
 The integration guide is the reference for **machine-to-machine** calls (`GET /api/jobs/pending`, status updates, upload payload shape). Rehab-platform’s `app.py` is authoritative if anything diverges.
 
@@ -21,6 +22,17 @@ The garmin-collector runs independently and handles all Garmin API interactions.
 2. Connects to Garmin Connect using stored credentials
 3. Fetches heart rate, stress, body battery, and activity data for requested dates
 4. Uploads the collected data back to the server
+
+### Where it runs
+
+Typical setups (no containers):
+
+| Environment | Machine | Command | Load |
+|-------------|---------|---------|------|
+| **Dev** | MacBook, this repo folder | `python collector.py --poll` | Occasional jobs while debugging |
+| **Prod** | Windows mini-ITX, clone of this repo | `python collector.py --poll` | About **5–10** collections per day as needed |
+
+Garmin OAuth tokens should live **inside each clone** (see `GARMINTOKENS` below) so dev and prod do not share or overwrite each other’s sessions.
 
 ## Setup
 
@@ -45,6 +57,9 @@ Edit `.env` with your configuration:
 GARMIN_EMAIL=your.email@example.com
 GARMIN_PASSWORD=your_password
 
+# Garth OAuth tokens — directory inside this repo (gitignored). See env.example.
+GARMINTOKENS=.garmin-tokens
+
 # Rehab Platform server configuration
 REHAB_PLATFORM_URL=http://localhost:5001
 SHARED_SECRET=your_shared_secret_here
@@ -54,6 +69,8 @@ POLL_INTERVAL=60
 ```
 
 **Important**: `SHARED_SECRET` must match rehab-platform on both sides (e.g. `API_CONFIG['SHARED_SECRET']` / environment variables there and `SHARED_SECRET` here). Mismatches return **401 Unauthorized**.
+
+**Garmin tokens:** Set `GARMINTOKENS` to a directory path under the project (default `.garmin-tokens/`). The collector will use it to reuse OAuth sessions instead of performing a full Garmin SSO sign-in on every job (which can trigger **429 Too Many Requests** on `sso.garmin.com`). The directory is listed in `.gitignore` — never commit token files. Restrict permissions on that folder where your OS allows (e.g. `chmod 700 .garmin-tokens` on macOS/Linux).
 
 ### 3. Run the Collector
 
@@ -216,6 +233,8 @@ python collector.py --poll >> collector.log 2>&1
 * Verify your Garmin credentials are correct
 * Check that the shared secret matches between collector and server
 * Ensure the server URL is accessible from the collector machine
+* Ensure `GARMINTOKENS` points at a **persistent directory inside the project clone** (see `env.example`). Without saved tokens, every job can trigger a full Garmin login and hit **429** throttling on SSO even at modest daily volume
+* If you use MFA, you may need a one-time interactive login (e.g. run `example.py` with the same `GARMINTOKENS`) to create tokens before headless `collector.py --poll` works reliably
 
 ### Network Issues
 
