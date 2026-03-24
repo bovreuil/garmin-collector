@@ -297,6 +297,8 @@ Admins create jobs from rehab-platform **`/data`** (`POST /collect-data`), which
 
 Python 3 API wrapper for Garmin Connect to get statistics and set activities. Forked from [cyberjunky/python-garminconnect](https://github.com/cyberjunky/python-garminconnect) and customized for the rehab-platform project.
 
+**Branch `experiment/react-garmin`:** vendors upstream’s **`react`** auth stack (JWT, no Garth). See [docs/GARMIN_AUTH_LANDSCAPE.md](docs/GARMIN_AUTH_LANDSCAPE.md). **`master`** may still use the older Garth-based library until you merge the experiment.
+
 ### Resources
 
 - **Main Application**: [rehab-platform](https://github.com/bovreuil/rehab-platform)

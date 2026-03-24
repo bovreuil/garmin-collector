@@ -2,6 +2,8 @@
 
 This document summarizes **how this project talks to Garmin**, what **Garth** is, what the community has reported in **March 2026**, and **practical options** (including the upstream **`react`** branch). It complements [INTEGRATION.md](INTEGRATION.md) (rehab-platform contract) and [plans/garmin-429-recovery.md](plans/garmin-429-recovery.md) (collector token reuse and implementation notes).
 
+**This repository:** On branch **`experiment/react-garmin`**, the vendored **`garminconnect/`** package and root **`pyproject.toml`** track **[cyberjunky/python-garminconnect](https://github.com/cyberjunky/python-garminconnect) `upstream/react`** (no **Garth** dependency; JWT / `garmin_tokens.json` session files). **`collector.py`** uses **`api.client.dump()`** after login. Merge to **`master`** when you are satisfied with real-world runs; stay on **`master`** for the older Garth-based vendor until then.
+
 ---
 
 ## How garmin-collector authenticates today

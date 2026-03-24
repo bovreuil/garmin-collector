@@ -91,37 +91,21 @@ class GarminCollector:
 
     def _perform_garmin_login(self) -> Garmin:
         """
-        Try saved tokens first, then email/password (temporary GARMINTOKENS unset so login() does not reload tokens).
-        Persist tokens to disk after a successful password login.
+        Log in with Garth-free python-garminconnect (upstream ``react`` client): load tokens
+        from ``path_str`` when present, otherwise use email/password. Persist session to disk
+        after success via ``client.dump`` (JWT / garmin_tokens.json layout).
         """
         path = self._tokenstore_path
         path_str = str(path)
 
-        try:
-            api = Garmin()
-            api.login(path_str)
-            logger.info("Garmin session established using saved tokens at %s", path_str)
-            return api
-        except GarminConnectTooManyRequestsError:
-            logger.error(
-                "Garmin rate limited while using saved tokens (429). "
-                "Wait before retry; avoid repeated full logins."
-            )
-            raise
-        except (FileNotFoundError, GarminConnectAuthenticationError, GarminConnectConnectionError) as e:
-            logger.info(
-                "Garmin saved tokens not usable (%s); attempting password login",
-                e,
-            )
-
         env_backup = os.environ.pop("GARMINTOKENS", None)
         try:
             api = Garmin(self.garmin_email, self.garmin_password)
-            api.login()
-        except GarminConnectTooManyRequestsError as e:
+            api.login(path_str)
+        except GarminConnectTooManyRequestsError:
             logger.error(
-                "Garmin SSO or OAuth rate limited (429) during password login. "
-                "Wait several hours if needed; then ensure tokens are saved under %s to reduce sign-ins.",
+                "Garmin login rate limited (429). Wait before retry; tokens under %s "
+                "avoid repeating full sign-in once established.",
                 path_str,
             )
             raise
@@ -130,11 +114,8 @@ class GarminCollector:
                 os.environ["GARMINTOKENS"] = env_backup
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        api.garth.dump(path_str)
-        logger.info(
-            "Garmin session established with password login; tokens saved to %s",
-            path_str,
-        )
+        api.client.dump(path_str)
+        logger.info("Garmin session established; tokens saved to %s", path_str)
         return api
 
     def poll_for_jobs(self) -> List[Dict]:
