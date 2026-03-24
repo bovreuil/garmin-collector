@@ -42,6 +42,8 @@ Garmin OAuth tokens should live **inside each clone** (see `GARMINTOKENS` below)
 pip install -r requirements.txt
 ```
 
+This installs dependencies and the **local** `garminconnect` package from this repository (`-e .` in `requirements.txt`), so the vendored library and `garth` versions stay aligned with `pyproject.toml`.
+
 ### 2. Configure Environment Variables
 
 Copy the example environment file and fill in your details:
@@ -91,7 +93,7 @@ The collector periodically checks the rehab-platform server for pending jobs by 
 When a job is found, the collector:
 
 1. Updates the job status to "running"
-2. Connects to Garmin Connect
+2. Connects to Garmin Connect (reuses saved OAuth tokens in `GARMINTOKENS` when valid; otherwise logs in with credentials and saves tokens)
 3. Fetches heart rate data for the target date (2-minute intervals)
 4. Fetches all-day stress and body battery data for the target date (3-minute intervals, via `get_all_day_stress()` endpoint)
 5. Fetches resting heart rate data for the target date (via `get_rhr_day()` endpoint)

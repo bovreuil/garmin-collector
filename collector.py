@@ -12,9 +12,17 @@ import os
 import requests
 import time
 from datetime import datetime
-from typing import Dict, Optional, List
-from garminconnect import Garmin
+from pathlib import Path
+from typing import Dict, List, Optional
+
 from dotenv import load_dotenv
+
+from garminconnect import (
+    Garmin,
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
 
 # Load environment variables
 load_dotenv()
@@ -25,6 +33,20 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Project root (directory containing collector.py); used for default token path and relative GARMINTOKENS.
+_PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def resolve_tokenstore_path() -> Path:
+    """Garmin/Garth token directory: GARMINTOKENS or <project>/.garmin-tokens; relative paths are under project root."""
+    raw = os.getenv("GARMINTOKENS")
+    if not raw:
+        return _PROJECT_ROOT / ".garmin-tokens"
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        p = (_PROJECT_ROOT / p).resolve()
+    return p
 
 
 class GarminCollector:
@@ -51,7 +73,70 @@ class GarminCollector:
             'Authorization': f'Bearer {shared_secret}',
             'Content-Type': 'application/json'
         })
-    
+
+        self._tokenstore_path = resolve_tokenstore_path()
+        self._garmin: Optional[Garmin] = None
+        logger.info("Garmin token storage directory: %s", self._tokenstore_path)
+
+    def invalidate_garmin_client(self) -> None:
+        """Drop cached Garmin client so the next job performs token-first login again."""
+        self._garmin = None
+
+    def get_garmin_api(self) -> Garmin:
+        """Return a logged-in Garmin client, reusing the in-process session when possible."""
+        if self._garmin is not None:
+            return self._garmin
+        self._garmin = self._perform_garmin_login()
+        return self._garmin
+
+    def _perform_garmin_login(self) -> Garmin:
+        """
+        Try saved tokens first, then email/password (temporary GARMINTOKENS unset so login() does not reload tokens).
+        Persist tokens to disk after a successful password login.
+        """
+        path = self._tokenstore_path
+        path_str = str(path)
+
+        try:
+            api = Garmin()
+            api.login(path_str)
+            logger.info("Garmin session established using saved tokens at %s", path_str)
+            return api
+        except GarminConnectTooManyRequestsError:
+            logger.error(
+                "Garmin rate limited while using saved tokens (429). "
+                "Wait before retry; avoid repeated full logins."
+            )
+            raise
+        except (FileNotFoundError, GarminConnectAuthenticationError, GarminConnectConnectionError) as e:
+            logger.info(
+                "Garmin saved tokens not usable (%s); attempting password login",
+                e,
+            )
+
+        env_backup = os.environ.pop("GARMINTOKENS", None)
+        try:
+            api = Garmin(self.garmin_email, self.garmin_password)
+            api.login()
+        except GarminConnectTooManyRequestsError as e:
+            logger.error(
+                "Garmin SSO or OAuth rate limited (429) during password login. "
+                "Wait several hours if needed; then ensure tokens are saved under %s to reduce sign-ins.",
+                path_str,
+            )
+            raise
+        finally:
+            if env_backup is not None:
+                os.environ["GARMINTOKENS"] = env_backup
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        api.garth.dump(path_str)
+        logger.info(
+            "Garmin session established with password login; tokens saved to %s",
+            path_str,
+        )
+        return api
+
     def poll_for_jobs(self) -> List[Dict]:
         """
         Poll the server for pending jobs.
@@ -108,22 +193,67 @@ class GarminCollector:
             Dictionary with collection results
         """
         logger.info(f"Starting data collection for {target_date}")
-        
+
+        retried_auth = False
+
+        while True:
+            try:
+                api = self.get_garmin_api()
+            except GarminConnectTooManyRequestsError as e:
+                logger.error("Garmin login rate limited: %s", e, exc_info=True)
+                return {
+                    'success': False,
+                    'failure_kind': 'garmin_rate_limit',
+                    'message': (
+                        "Garmin SSO or OAuth rate limited (429). Wait before retry; "
+                        "use saved tokens under the configured GARMINTOKENS directory "
+                        "to avoid a full sign-in on every job."
+                    ),
+                    'data_found': False,
+                }
+            except Exception as e:
+                logger.error(f"Error connecting to Garmin: {e}", exc_info=True)
+                return {
+                    'success': False,
+                    'failure_kind': 'garmin_login',
+                    'message': f"Error connecting to Garmin: {str(e)}",
+                    'data_found': False,
+                }
+
+            try:
+                return self._collect_garmin_data_body(api, target_date)
+            except GarminConnectAuthenticationError as e:
+                if retried_auth:
+                    logger.error(
+                        "Garmin authentication failed again after re-login: %s", e, exc_info=True
+                    )
+                    return {
+                        'success': False,
+                        'failure_kind': 'garmin_auth_during_fetch',
+                        'message': f"Garmin authentication failed during data fetch: {e}",
+                        'data_found': False,
+                    }
+                logger.warning(
+                    "Garmin authentication error during fetch; clearing session and retrying once"
+                )
+                retried_auth = True
+                self.invalidate_garmin_client()
+                continue
+            except GarminConnectTooManyRequestsError as e:
+                logger.error("Garmin API rate limited during fetch: %s", e, exc_info=True)
+                return {
+                    'success': False,
+                    'failure_kind': 'garmin_rate_limit',
+                    'message': (
+                        f"Garmin rate limited during data fetch (429): {e}. "
+                        "Retry later with a longer interval if this persists."
+                    ),
+                    'data_found': False,
+                }
+
+    def _collect_garmin_data_body(self, api: Garmin, target_date: str) -> Dict:
+        """Fetch all series for target_date using an already-logged-in client."""
         try:
-            # Connect to Garmin
-            api = Garmin(self.garmin_email, self.garmin_password)
-            api.login()
-            logger.info(f"Connected to Garmin with email {self.garmin_email}")
-        except Exception as e:
-            logger.error(f"Error connecting to Garmin: {e}", exc_info=True)
-            return {
-                'success': False,
-                'message': f"Error connecting to Garmin: {str(e)}",
-                'data_found': False
-            }
-        
-        try:
-            
             # Get heart rate data
             logger.info(f"Fetching heart rate data for {target_date}")
             heart_rate_data = api.get_heart_rates(target_date)
@@ -242,7 +372,9 @@ class GarminCollector:
             
             logger.info(f"Data collection completed for {target_date}")
             return result_data
-            
+
+        except (GarminConnectAuthenticationError, GarminConnectTooManyRequestsError):
+            raise
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()
@@ -254,7 +386,7 @@ class GarminCollector:
                 'data_found': False,
                 'traceback': error_traceback
             }
-    
+
     def collect_activities_for_date(self, api: Garmin, target_date: str) -> List[Dict]:
         """
         Collect activities for a specific date.
@@ -602,8 +734,18 @@ class GarminCollector:
                     self.update_job_status(job_id, 'failed', error_message="Failed to upload data")
                     logger.error(f"Job {job_id} failed to upload data")
             else:
-                self.update_job_status(job_id, 'completed', result)
-                logger.info(f"Job {job_id} completed with no data found")
+                fk = result.get('failure_kind')
+                if fk in (
+                    'garmin_login',
+                    'garmin_rate_limit',
+                    'garmin_auth_during_fetch',
+                ):
+                    msg = result.get('message', 'Garmin collection failed')
+                    self.update_job_status(job_id, 'failed', error_message=msg)
+                    logger.error(f"Job {job_id} failed: {msg}")
+                else:
+                    self.update_job_status(job_id, 'completed', result)
+                    logger.info(f"Job {job_id} completed with no data found")
                 
         except Exception as e:
             logger.error(f"Job {job_id} failed with error: {e}")

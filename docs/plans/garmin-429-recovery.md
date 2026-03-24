@@ -1,14 +1,15 @@
 # Restore Garmin collection after SSO 429
 
-**Plan status:** Collector code changes (token-first login, client reuse, 429 handling) are **not** implemented yet; repo documentation and `env.example` for project-local tokens are in place.
+**Plan status:** Token-first login, in-process client reuse, fetch-time auth retry, 429-aware failures, and `requirements.txt` editable install are implemented. Optional follow-up: merge newer upstream `garminconnect` / `garth` if Garmin API changes require it.
 
 **Open work**
 
-- [ ] Token-first login + `garth.dump` after credential login; default `.garmin-tokens` next to `collector.py`
-- [ ] Reuse Garmin client across jobs; re-auth only on failure
+- [x] Token-first login + `garth.dump` after credential login; default `.garmin-tokens` next to `collector.py` (via `resolve_tokenstore_path()`)
+- [x] Reuse Garmin client across jobs; re-auth only on failure (invalidate + one retry on `GarminConnectAuthenticationError` during fetch)
 - [x] Document `GARMINTOKENS`, README, INTEGRATION, `.gitignore` for `.garmin-tokens/`
-- [ ] Map login 429 to clear job failure / backoff (`GarminConnectTooManyRequestsError`)
-- [ ] Align install story and merge upstream `garminconnect` / `garth` as needed
+- [x] Map login / fetch 429 to clear job failure messaging (`GarminConnectTooManyRequestsError`); login/auth failures use `failed` job status with `failure_kind`
+- [x] Align install story: `requirements.txt` uses `-e .` with `pyproject.toml`
+- [ ] Optional: merge upstream `garminconnect` / `garth` beyond current vendored versions if needed for Garmin-side changes
 
 ---
 
