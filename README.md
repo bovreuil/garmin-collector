@@ -9,6 +9,7 @@ This is a standalone service that polls the rehab-platform server for Garmin dat
 | This README | Setup, runtime behavior, deployment, troubleshooting |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | Architecture vs rehab-platform, full HTTP + JSON contract, auth, operational notes |
 | [docs/plans/garmin-429-recovery.md](docs/plans/garmin-429-recovery.md) | Plan: Garmin SSO 429 / token-first login, collector follow-ups |
+| [docs/GARMIN_AUTH_LANDSCAPE.md](docs/GARMIN_AUTH_LANDSCAPE.md) | Garth, upstream issues (#332/#337, garth#217), `react` branch, how to test |
 
 The integration guide is the reference for **machine-to-machine** calls (`GET /api/jobs/pending`, status updates, upload payload shape). Rehab-platform’s `app.py` is authoritative if anything diverges.
 
@@ -250,6 +251,7 @@ python collector.py --poll >> collector.log 2>&1
 * Stress and body battery collection failures are logged as warnings but don't block other data collection
 * If you encounter frequent authentication failures, Garmin may have flagged your IP
 * Consider running the collector from a different network if issues persist
+* For **SSO 429**, **Garth**, upstream **`react`** branch experiments, and **branch vs separate-clone** testing workflow, see [docs/GARMIN_AUTH_LANDSCAPE.md](docs/GARMIN_AUTH_LANDSCAPE.md)
 
 ### Windows Scheduled Task Issues
 

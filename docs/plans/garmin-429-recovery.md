@@ -1,5 +1,7 @@
 # Restore Garmin collection after SSO 429
 
+Broader context (Garth, [garth#217](https://github.com/matin/garth/issues/217), python-garminconnect **#332** / **#337**, **`react`** branch, testing workflow): see [GARMIN_AUTH_LANDSCAPE.md](../GARMIN_AUTH_LANDSCAPE.md).
+
 **Plan status:** Token-first login, in-process client reuse, fetch-time auth retry, 429-aware failures, and `requirements.txt` editable install are implemented. Optional follow-up: merge newer upstream `garminconnect` / `garth` if Garmin API changes require it.
 
 **Open work**

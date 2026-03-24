@@ -205,7 +205,9 @@ For full production checklist (Gunicorn workers, Dropbox, OAuth, etc.), see reha
 
 ## 7. Upstream library
 
-Garmin API access in the collector is expected to align with **[python-garminconnect](https://github.com/cyberjunky/python-garminconnect)** (Garth OAuth, token storage, endpoint wrappers). Upstream changes to response shapes may require updates to the **payload mapping** in the collector so section 5 still holds.
+Garmin API access in the collector is expected to align with **[python-garminconnect](https://github.com/cyberjunky/python-garminconnect)** (historically Garth-based OAuth/SSO, token storage, endpoint wrappers). Upstream changes to response shapes may require updates to the **payload mapping** in the collector so section 5 still holds.
+
+For **March 2026 auth disruptions**, **Garth**, issue threads, and the upstream **`react`** branch experiment, see **[GARMIN_AUTH_LANDSCAPE.md](GARMIN_AUTH_LANDSCAPE.md)**.
 
 ---
 
