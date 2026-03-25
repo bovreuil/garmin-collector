@@ -1,6 +1,6 @@
 # Garmin authentication landscape (Garth, upstream issues, `react` branch)
 
-This document summarizes **how this project talks to Garmin**, what **Garth** is, what the community has reported in **March 2026**, and **practical options** (including the upstream **`react`** branch). It complements [INTEGRATION.md](INTEGRATION.md) (rehab-platform contract) and [plans/garmin-429-recovery.md](plans/garmin-429-recovery.md) (archived checklist).
+This document summarizes **how this project talks to Garmin**, what **Garth** is, what the community has reported in **March 2026**, and **practical options** (including the upstream **`react`** branch). It complements [INTEGRATION.md](INTEGRATION.md) (rehab-platform contract).
 
 **Implemented auth design (why JWT + Playwright, env vars, file map):** [MAINTAINERS.md](MAINTAINERS.md).
 

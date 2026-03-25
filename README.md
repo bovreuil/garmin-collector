@@ -10,7 +10,6 @@ This is a standalone service that polls the rehab-platform server for Garmin dat
 | [docs/MAINTAINERS.md](docs/MAINTAINERS.md) | **Maintainers / coding agents:** auth design (JWT, Playwright, 429), key files, env, upstream sync |
 | [AGENTS.md](AGENTS.md) | Short pointer to MAINTAINERS + other docs |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | Architecture vs rehab-platform, full HTTP + JSON contract, auth, operational notes |
-| [docs/plans/garmin-429-recovery.md](docs/plans/garmin-429-recovery.md) | Archived checklist (superseded; see MAINTAINERS) |
 | [docs/GARMIN_AUTH_LANDSCAPE.md](docs/GARMIN_AUTH_LANDSCAPE.md) | Garth, upstream issues (#332/#337, garth#217), `react` branch, how to test |
 
 The integration guide is the reference for **machine-to-machine** calls (`GET /api/jobs/pending`, status updates, upload payload shape). Rehab-platform’s `app.py` is authoritative if anything diverges.
