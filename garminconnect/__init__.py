@@ -512,6 +512,9 @@ class Garmin:
 
             return mfa_status, _legacy_token
 
+        except GarminConnectTooManyRequestsError:
+            # Client.login raises this directly (e.g. mobile API 429); do not wrap.
+            raise
         except (
             HTTPError,
             requests.exceptions.HTTPError,

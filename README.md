@@ -56,6 +56,8 @@ python scripts/garmin_playwright_login.py --verify
 
 That writes `garmin_tokens.json` under `GARMINTOKENS` (e.g. `.garmin-tokens/`) in the same shape `collector.py` expects. Run it on the **same machine** as the collector when sessions may be IP-bound.
 
+**Automatic browser seed from the collector:** If programmatic login hits **429**, `collector.py` can run this script once and retry: interactive terminals enable this by default (stdin is a TTY). For **systemd**, Windows Task Scheduler, or other non-TTY runs, set **`GARMIN_BROWSER_LOGIN=1`** (see `env.example`). **`GARMIN_PLAYWRIGHT_CHROME=1`** passes **`--chrome`** to the helper. Requires the same `pip install -r requirements-browser.txt` and `playwright install chromium` as above.
+
 If the SSO page shows a red **“unexpected error”** banner (or JWT capture still fails), try in order: **`python scripts/garmin_playwright_login.py --chrome --verify`** (requires [Google Chrome](https://www.google.com/chrome/) installed), **`--no-submit`** (script fills the form; you click Sign in), **`--entry portal`**, or **`--manual`** (you sign in entirely by hand; waits up to 10 minutes). Check `garmin-login-debug.png` under your token directory if the script saves a screenshot.
 
 ### 2. Configure Environment Variables

@@ -10,6 +10,8 @@ import json
 import logging
 import os
 import requests
+import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +51,24 @@ def resolve_tokenstore_path() -> Path:
     return p
 
 
+def _browser_login_enabled() -> bool:
+    """When True, collector may run scripts/garmin_playwright_login.py after programmatic 429.
+
+    - GARMIN_BROWSER_LOGIN=0|off|false: never
+    - GARMIN_BROWSER_LOGIN=1|on|true: always (e.g. systemd: set explicitly)
+    - unset: only if stdin is a TTY (interactive terminal)
+    """
+    v = os.getenv("GARMIN_BROWSER_LOGIN", "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    return sys.stdin.isatty()
+
+
+_PLAYWRIGHT_SCRIPT = _PROJECT_ROOT / "scripts" / "garmin_playwright_login.py"
+
+
 class GarminCollector:
     """Handles Garmin data collection and job processing."""
     
@@ -78,6 +98,34 @@ class GarminCollector:
         self._garmin: Optional[Garmin] = None
         logger.info("Garmin token storage directory: %s", self._tokenstore_path)
 
+    def _invoke_playwright_seeding(self) -> None:
+        """Run browser login helper; writes garmin_tokens.json under GARMINTOKENS."""
+        if not _PLAYWRIGHT_SCRIPT.is_file():
+            raise FileNotFoundError(
+                f"Playwright helper missing: {_PLAYWRIGHT_SCRIPT}. "
+                "Install with: pip install -r requirements-browser.txt && playwright install chromium"
+            )
+        cmd = [sys.executable, str(_PLAYWRIGHT_SCRIPT), "--verify"]
+        if os.getenv("GARMIN_PLAYWRIGHT_CHROME", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        ):
+            cmd.append("--chrome")
+        logger.info("Running browser login: %s", " ".join(cmd))
+        result = subprocess.run(
+            cmd,
+            cwd=str(_PROJECT_ROOT),
+            env=os.environ.copy(),
+        )
+        if result.returncode != 0:
+            raise GarminConnectConnectionError(
+                "Browser login helper exited with code "
+                f"{result.returncode}. Install browser deps and run manually: "
+                "python scripts/garmin_playwright_login.py --verify"
+            )
+
     def invalidate_garmin_client(self) -> None:
         """Drop cached Garmin client so the next job performs token-first login again."""
         self._garmin = None
@@ -90,10 +138,17 @@ class GarminCollector:
         return self._garmin
 
     def _perform_garmin_login(self) -> Garmin:
+        return self._perform_garmin_login_once(allow_browser_fallback=True)
+
+    def _perform_garmin_login_once(self, *, allow_browser_fallback: bool) -> Garmin:
         """
         Log in with Garth-free python-garminconnect (upstream ``react`` client): load tokens
         from ``path_str`` when present, otherwise use email/password. Persist session to disk
         after success via ``client.dump`` (JWT / garmin_tokens.json layout).
+
+        On HTTP 429 from programmatic login, optionally runs Playwright once (see
+        ``_browser_login_enabled``) to seed tokens, then retries login without a second
+        browser attempt.
         """
         path = self._tokenstore_path
         path_str = str(path)
@@ -101,14 +156,45 @@ class GarminCollector:
         env_backup = os.environ.pop("GARMINTOKENS", None)
         try:
             api = Garmin(self.garmin_email, self.garmin_password)
-            api.login(path_str)
-        except GarminConnectTooManyRequestsError:
-            logger.error(
-                "Garmin login rate limited (429). Wait before retry; tokens under %s "
-                "avoid repeating full sign-in once established.",
-                path_str,
-            )
-            raise
+            try:
+                api.login(path_str)
+            except GarminConnectTooManyRequestsError:
+                if allow_browser_fallback and _browser_login_enabled():
+                    logger.warning(
+                        "Garmin SSO rate limited (429) on password login. "
+                        "Opening browser to seed tokens under %s",
+                        path_str,
+                    )
+                    self._invoke_playwright_seeding()
+                    self.invalidate_garmin_client()
+                    return self._perform_garmin_login_once(
+                        allow_browser_fallback=False
+                    )
+                logger.error(
+                    "Garmin login rate limited (429). Save tokens under %s (run "
+                    "scripts/garmin_playwright_login.py), wait, or set "
+                    "GARMIN_BROWSER_LOGIN=1 when not attached to a TTY.",
+                    path_str,
+                )
+                raise
+            except GarminConnectConnectionError as e:
+                # Defensive: 429 may appear as a wrapped connection error
+                if (
+                    allow_browser_fallback
+                    and _browser_login_enabled()
+                    and ("429" in str(e) or "rate limit" in str(e).lower())
+                ):
+                    logger.warning(
+                        "Garmin login failed with rate limit message; "
+                        "trying browser seed under %s",
+                        path_str,
+                    )
+                    self._invoke_playwright_seeding()
+                    self.invalidate_garmin_client()
+                    return self._perform_garmin_login_once(
+                        allow_browser_fallback=False
+                    )
+                raise
         finally:
             if env_backup is not None:
                 os.environ["GARMINTOKENS"] = env_backup
