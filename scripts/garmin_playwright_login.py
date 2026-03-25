@@ -716,46 +716,52 @@ def run_login(
                 f"Did not reach connect.garmin.com in time. Screenshot: {dbg}"
             ) from e
 
-        deadline = time.time() + (120.0 if (manual or no_submit) else 45.0)
-        while time.time() < deadline and "refresh" not in captured:
-            time.sleep(0.35)
-
-        try:
-            page.wait_for_load_state("networkidle", timeout=90_000)
-        except Exception:  # noqa: BLE001
-            pass
-
-        t_wait = time.time() + 50.0
-        while time.time() < t_wait and "refresh" not in captured:
-            tok = _tokens_from_connect_session(page, context.cookies(), csrf_from_request)
+        def _capture_from_session() -> bool:
+            """True if hook or cookies/storage already have a full JWT+CSRF pair."""
+            ref = captured.get("refresh")
+            if (
+                isinstance(ref, dict)
+                and ref.get("encryptedToken")
+                and ref.get("csrfToken")
+            ):
+                return True
+            tok = _tokens_from_connect_session(
+                page, context.cookies(), csrf_from_request
+            )
             if tok:
                 captured["refresh"] = tok
                 _LOGGER.info(
                     "Captured session (JWT_WEB or localStorage Token + CSRF from "
                     "requests/storage/cookies)"
                 )
+                return True
+            return False
+
+        # Poll as soon as we hit Connect — JWT_WEB / CSRF often appear within seconds.
+        # (An older version waited ~45s only for di-oauth JSON in on_response, which often
+        # has an empty body; session tokens are detected below instead.)
+        poll_interval = 0.2
+        max_wait = 120.0 if (manual or no_submit) else 90.0
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            if _capture_from_session():
                 break
-            time.sleep(0.35)
+            time.sleep(poll_interval)
+
+        # Avoid networkidle here: Garmin SPA may keep connections open, burning 60–90s.
 
         if "refresh" not in captured:
             _LOGGER.info("Reloading dashboard to trigger XHRs with connect-csrf-token")
             try:
                 page.goto(_CONNECT_APP_HOME, wait_until="load", timeout=120000)
-                time.sleep(4.0)
             except Exception as e:  # noqa: BLE001
                 _LOGGER.debug("Reload: %s", e)
-            try:
-                page.wait_for_load_state("networkidle", timeout=60_000)
-            except Exception:  # noqa: BLE001
-                pass
-            t_extra = time.time() + 45.0
-            while time.time() < t_extra and "refresh" not in captured:
-                tok = _tokens_from_connect_session(page, context.cookies(), csrf_from_request)
-                if tok:
-                    captured["refresh"] = tok
+            reload_deadline = time.time() + 30.0
+            while time.time() < reload_deadline:
+                if _capture_from_session():
                     _LOGGER.info("Captured session after dashboard reload")
                     break
-                time.sleep(0.35)
+                time.sleep(poll_interval)
 
         if "refresh" not in captured:
             ws = _csrf_from_web_storage(page)
