@@ -20,7 +20,7 @@ GARMIN_EMAIL / GARMIN_PASSWORD (same as collector), or legacy EMAIL / PASSWORD
 GARMINTOKENS — directory for garmin_tokens.json (default: .garmin-tokens under repo root)
 
 If password login hits HTTP 429, seed tokens with:
-  pip install -r requirements-browser.txt && playwright install chromium
+  pip install -r requirements-browser.txt && python -m playwright install chromium
   python scripts/garmin_playwright_login.py --verify
 """
 
@@ -200,7 +200,7 @@ def init_api() -> Garmin | None:
         except GarminConnectTooManyRequestsError:
             print("❌ Garmin rate-limited credential login (429).")
             print(
-                "💡 Run: pip install -r requirements-browser.txt && playwright install chromium"
+                "💡 Run: pip install -r requirements-browser.txt && python -m playwright install chromium"
             )
             print("   then: python scripts/garmin_playwright_login.py --verify")
             return None

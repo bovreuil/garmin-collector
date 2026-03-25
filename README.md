@@ -7,10 +7,11 @@ This is a standalone service that polls the rehab-platform server for Garmin dat
 | Document | Contents |
 |----------|----------|
 | This README | Setup, runtime behavior, deployment, troubleshooting |
+| [docs/MAINTAINERS.md](docs/MAINTAINERS.md) | **Maintainers / coding agents:** auth design (JWT, Playwright, 429), key files, env, upstream sync |
+| [AGENTS.md](AGENTS.md) | Short pointer to MAINTAINERS + other docs |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | Architecture vs rehab-platform, full HTTP + JSON contract, auth, operational notes |
-| [docs/plans/garmin-429-recovery.md](docs/plans/garmin-429-recovery.md) | Plan: Garmin SSO 429 / token-first login, collector follow-ups |
+| [docs/plans/garmin-429-recovery.md](docs/plans/garmin-429-recovery.md) | Archived checklist (superseded; see MAINTAINERS) |
 | [docs/GARMIN_AUTH_LANDSCAPE.md](docs/GARMIN_AUTH_LANDSCAPE.md) | Garth, upstream issues (#332/#337, garth#217), `react` branch, how to test |
-| [docs/AGENT_HANDOFF_GARMIN_MARCH_2026.md](docs/AGENT_HANDOFF_GARMIN_MARCH_2026.md) | **Next agent:** investigation log, test timestamps, commits/SHAs, Playwright next step |
 
 The integration guide is the reference for **machine-to-machine** calls (`GET /api/jobs/pending`, status updates, upload payload shape). Rehab-platform’s `app.py` is authoritative if anything diverges.
 
@@ -50,13 +51,15 @@ This installs dependencies and the **local** `garminconnect` package from this r
 
 ```bash
 pip install -r requirements-browser.txt
-playwright install chromium
+python -m playwright install chromium
 python scripts/garmin_playwright_login.py --verify
 ```
 
+(`python -m playwright install …` avoids needing `playwright` on `PATH` on Windows.)
+
 That writes `garmin_tokens.json` under `GARMINTOKENS` (e.g. `.garmin-tokens/`) in the same shape `collector.py` expects. Run it on the **same machine** as the collector when sessions may be IP-bound.
 
-**Automatic browser seed from the collector:** If programmatic login hits **429**, `collector.py` can run this script once and retry: interactive terminals enable this by default (stdin is a TTY). For **systemd**, Windows Task Scheduler, or other non-TTY runs, set **`GARMIN_BROWSER_LOGIN=1`** (see `env.example`). **`GARMIN_PLAYWRIGHT_CHROME=1`** passes **`--chrome`** to the helper. Requires the same `pip install -r requirements-browser.txt` and `playwright install chromium` as above.
+**Automatic browser seed from the collector:** If programmatic login hits **429**, `collector.py` can run this script once and retry: interactive terminals enable this by default (stdin is a TTY). For **systemd**, Windows Task Scheduler, or other non-TTY runs, set **`GARMIN_BROWSER_LOGIN=1`** (see `env.example`). **`GARMIN_PLAYWRIGHT_CHROME=1`** passes **`--chrome`** to the helper. Requires the same browser dependencies as above.
 
 If the SSO page shows a red **“unexpected error”** banner (or JWT capture still fails), try in order: **`python scripts/garmin_playwright_login.py --chrome --verify`** (requires [Google Chrome](https://www.google.com/chrome/) installed), **`--no-submit`** (script fills the form; you click Sign in), **`--entry portal`**, or **`--manual`** (you sign in entirely by hand; waits up to 10 minutes). Check `garmin-login-debug.png` under your token directory if the script saves a screenshot.
 
@@ -178,6 +181,8 @@ This collector is designed to run on a local machine (like your Windows 11 mini-
 2. **Install Dependencies**:
    ```cmd
    pip install -r requirements.txt
+   pip install -r requirements-browser.txt
+   python -m playwright install chromium
    ```
 
 3. **Configure Environment**:
@@ -193,6 +198,9 @@ This collector is designed to run on a local machine (like your Windows 11 mini-
 
    # Polling configuration
    POLL_INTERVAL=30
+
+   # Non-interactive runs (Task Scheduler): allow collector to launch Playwright on 429
+   GARMIN_BROWSER_LOGIN=1
    ```
 
 4. **Create Startup Script**:
@@ -252,7 +260,7 @@ python collector.py --poll >> collector.log 2>&1
 * Check that the shared secret matches between collector and server
 * Ensure the server URL is accessible from the collector machine
 * Ensure `GARMINTOKENS` points at a **persistent directory inside the project clone** (see `env.example`). Without saved tokens, every job can trigger a full Garmin login and hit **429** throttling on SSO even at modest daily volume
-* If programmatic login hits **429**, use `scripts/garmin_playwright_login.py` (see setup above) instead of relying on `GARMIN_PASSWORD` in the collector until tokens exist
+* If programmatic login hits **429**, the collector can auto-run `scripts/garmin_playwright_login.py` when **`GARMIN_BROWSER_LOGIN=1`** or stdin is a TTY; or run that script manually (see setup above)
 * If you later enable MFA, use a headed browser flow or Garmin’s prompts; this repo assumes password-only accounts for the Playwright helper
 
 ### Network Issues
@@ -267,7 +275,7 @@ python collector.py --poll >> collector.log 2>&1
 * Stress and body battery collection failures are logged as warnings but don't block other data collection
 * If you encounter frequent authentication failures, Garmin may have flagged your IP
 * Consider running the collector from a different network if issues persist
-* For **SSO 429**, **Garth**, upstream **`react`** branch experiments, and **branch vs separate-clone** testing workflow, see [docs/GARMIN_AUTH_LANDSCAPE.md](docs/GARMIN_AUTH_LANDSCAPE.md)
+* For **SSO 429**, **Garth**, upstream **`react`** context, see [docs/GARMIN_AUTH_LANDSCAPE.md](docs/GARMIN_AUTH_LANDSCAPE.md); for auth design and env, see [docs/MAINTAINERS.md](docs/MAINTAINERS.md)
 
 ### Windows Scheduled Task Issues
 
@@ -321,7 +329,7 @@ Admins create jobs from rehab-platform **`/data`** (`POST /collect-data`), which
 
 Python 3 API wrapper for Garmin Connect to get statistics and set activities. Forked from [cyberjunky/python-garminconnect](https://github.com/cyberjunky/python-garminconnect) and customized for the rehab-platform project.
 
-**Branch `experiment/react-garmin`:** vendors upstream’s **`react`** auth stack (JWT, no Garth). See [docs/GARMIN_AUTH_LANDSCAPE.md](docs/GARMIN_AUTH_LANDSCAPE.md). **`master`** may still use the older Garth-based library until you merge the experiment.
+**`master`** vendors upstream’s **`react`**-style stack (JWT / `garmin_tokens.json`, no Garth) and adds Playwright-based token seeding when programmatic login hits **429**. See [docs/MAINTAINERS.md](docs/MAINTAINERS.md) and [docs/GARMIN_AUTH_LANDSCAPE.md](docs/GARMIN_AUTH_LANDSCAPE.md).
 
 ### Resources
 

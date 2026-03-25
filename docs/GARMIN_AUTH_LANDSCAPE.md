@@ -1,10 +1,10 @@
 # Garmin authentication landscape (Garth, upstream issues, `react` branch)
 
-This document summarizes **how this project talks to Garmin**, what **Garth** is, what the community has reported in **March 2026**, and **practical options** (including the upstream **`react`** branch). It complements [INTEGRATION.md](INTEGRATION.md) (rehab-platform contract) and [plans/garmin-429-recovery.md](plans/garmin-429-recovery.md) (collector token reuse and implementation notes).
+This document summarizes **how this project talks to Garmin**, what **Garth** is, what the community has reported in **March 2026**, and **practical options** (including the upstream **`react`** branch). It complements [INTEGRATION.md](INTEGRATION.md) (rehab-platform contract) and [plans/garmin-429-recovery.md](plans/garmin-429-recovery.md) (archived checklist).
 
-**Concrete test timeline, SHAs, and next-agent checklist:** [AGENT_HANDOFF_GARMIN_MARCH_2026.md](AGENT_HANDOFF_GARMIN_MARCH_2026.md).
+**Implemented auth design (why JWT + Playwright, env vars, file map):** [MAINTAINERS.md](MAINTAINERS.md).
 
-**This repository:** On branch **`experiment/react-garmin`**, the vendored **`garminconnect/`** package and root **`pyproject.toml`** track **[cyberjunky/python-garminconnect](https://github.com/cyberjunky/python-garminconnect) `upstream/react`** (no **Garth** dependency; JWT / `garmin_tokens.json` session files). **`collector.py`** uses **`api.client.dump()`** after login. **Baseline choice (Mar 2026):** stay on this branch for ongoing auth work—programmatic login is 429 on Garth and react paths alike, while the JWT stack is the better target for **browser-assisted** token seeding; see [AGENT_HANDOFF_GARMIN_MARCH_2026.md — Baseline branch](AGENT_HANDOFF_GARMIN_MARCH_2026.md#baseline-branch). Merge to **`master`** when real-world collection is stable; **`master`** until then keeps the older Garth-based vendor and does not carry the latest investigation docs at the same tip.
+**This repository:** **`master`** vendors **`garminconnect/`** and **`pyproject.toml`** from **[cyberjunky/python-garminconnect](https://github.com/cyberjunky/python-garminconnect) `react`** (no **Garth**; JWT / **`garmin_tokens.json`**). **`collector.py`** uses **`api.client.dump()`** after login and may run **`scripts/garmin_playwright_login.py`** when programmatic login returns **429**. See MAINTAINERS for details.
 
 ### Staying aligned with `upstream/react`
 
@@ -88,7 +88,7 @@ The **`react` branch** lives on **[cyberjunky/python-garminconnect](https://gith
 5. Run **`python collector.py --poll`** and fix any **API or import mismatches**.
 6. Expect **churn**: issue **#337** includes reports of **`react` working then breaking** after Garmin or branch updates. For a **home** deployment with modest frequency, you may still be acceptable risk.
 
-This repo **does not** pin you to `react` by default; documenting it here is so you can **choose** when to try it.
+This repo **has adopted** the `react`-style vendor for production; keep **`git diff upstream/react`** in mind when updating.
 
 ---
 

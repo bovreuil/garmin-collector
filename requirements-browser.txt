@@ -1,4 +1,4 @@
 # Optional: browser-based Garmin login (429 workaround). Install with:
 #   pip install -r requirements-browser.txt
-#   playwright install chromium
+#   python -m playwright install chromium
 playwright>=1.49.0

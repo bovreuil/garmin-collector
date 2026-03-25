@@ -41,7 +41,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 def resolve_tokenstore_path() -> Path:
-    """Garmin/Garth token directory: GARMINTOKENS or <project>/.garmin-tokens; relative paths are under project root."""
+    """Garmin token directory: GARMINTOKENS or <project>/.garmin-tokens; relative paths are under project root."""
     raw = os.getenv("GARMINTOKENS")
     if not raw:
         return _PROJECT_ROOT / ".garmin-tokens"
@@ -103,7 +103,8 @@ class GarminCollector:
         if not _PLAYWRIGHT_SCRIPT.is_file():
             raise FileNotFoundError(
                 f"Playwright helper missing: {_PLAYWRIGHT_SCRIPT}. "
-                "Install with: pip install -r requirements-browser.txt && playwright install chromium"
+                "Install with: pip install -r requirements-browser.txt && "
+                "python -m playwright install chromium"
             )
         cmd = [sys.executable, str(_PLAYWRIGHT_SCRIPT), "--verify"]
         if os.getenv("GARMIN_PLAYWRIGHT_CHROME", "").strip().lower() in (
@@ -166,7 +167,6 @@ class GarminCollector:
                         path_str,
                     )
                     self._invoke_playwright_seeding()
-                    self.invalidate_garmin_client()
                     return self._perform_garmin_login_once(
                         allow_browser_fallback=False
                     )
@@ -190,7 +190,6 @@ class GarminCollector:
                         path_str,
                     )
                     self._invoke_playwright_seeding()
-                    self.invalidate_garmin_client()
                     return self._perform_garmin_login_once(
                         allow_browser_fallback=False
                     )

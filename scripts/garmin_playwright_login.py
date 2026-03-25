@@ -5,7 +5,7 @@ compatible with garminconnect.client.Client.load / dump (upstream react stack).
 
 Use when programmatic login hits HTTP 429. Requires:
   pip install -r requirements-browser.txt
-  playwright install chromium
+  python -m playwright install chromium
 
 Env (same as collector): GARMIN_EMAIL, GARMIN_PASSWORD, optional GARMINTOKENS,
 optional .env via python-dotenv.
@@ -556,7 +556,7 @@ def run_login(
         raise RuntimeError(
             "Playwright is not installed. Run:\n"
             "  pip install -r requirements-browser.txt\n"
-            "  playwright install chromium"
+            "  python -m playwright install chromium"
         ) from e
 
     if manual and no_submit:
