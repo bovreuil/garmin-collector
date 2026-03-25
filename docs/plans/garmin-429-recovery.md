@@ -2,16 +2,19 @@
 
 Broader context (Garth, [garth#217](https://github.com/matin/garth/issues/217), python-garminconnect **#332** / **#337**, **`react`** branch, testing workflow): see [GARMIN_AUTH_LANDSCAPE.md](../GARMIN_AUTH_LANDSCAPE.md).
 
+**Full investigation log, dated test runs, git SHAs, instructions for the next agent:** [AGENT_HANDOFF_GARMIN_MARCH_2026.md](../AGENT_HANDOFF_GARMIN_MARCH_2026.md).
+
 **Plan status:** Token-first login, in-process client reuse, fetch-time auth retry, 429-aware failures, and `requirements.txt` editable install are implemented. Optional follow-up: merge newer upstream `garminconnect` / `garth` if Garmin API changes require it.
 
 **Open work**
 
-- [x] Token-first login + `garth.dump` after credential login; default `.garmin-tokens` next to `collector.py` (via `resolve_tokenstore_path()`)
+- [x] Token-first login + session **dump** after login (`garth.dump` on **master** / `client.dump` on **`experiment/react-garmin`**); default `.garmin-tokens` (via `resolve_tokenstore_path()`)
 - [x] Reuse Garmin client across jobs; re-auth only on failure (invalidate + one retry on `GarminConnectAuthenticationError` during fetch)
 - [x] Document `GARMINTOKENS`, README, INTEGRATION, `.gitignore` for `.garmin-tokens/`
 - [x] Map login / fetch 429 to clear job failure messaging (`GarminConnectTooManyRequestsError`); login/auth failures use `failed` job status with `failure_kind`
 - [x] Align install story: `requirements.txt` uses `-e .` with `pyproject.toml`
 - [ ] Optional: merge upstream `garminconnect` / `garth` beyond current vendored versions if needed for Garmin-side changes
+- [ ] **Blocker (Mar 2026):** programmatic login still **429** for user after wait + `react` — next step is **browser-based token capture** (see handoff doc)
 
 ---
 
