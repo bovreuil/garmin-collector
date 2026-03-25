@@ -13,12 +13,15 @@ This example demonstrates the basic usage of python-garminconnect:
 For a comprehensive demo of all available API calls, see demo.py
 
 Dependencies:
-pip3 install garth requests
+pip install -r requirements.txt
 
-Environment Variables (optional):
-export EMAIL=<your garmin email address>
-export PASSWORD=<your garmin password>
-export GARMINTOKENS=<path to token storage>
+Environment Variables (optional; load from .env if present):
+GARMIN_EMAIL / GARMIN_PASSWORD (same as collector), or legacy EMAIL / PASSWORD
+GARMINTOKENS — directory for garmin_tokens.json (default: .garmin-tokens under repo root)
+
+If password login hits HTTP 429, seed tokens with:
+  pip install -r requirements-browser.txt && playwright install chromium
+  python scripts/garmin_playwright_login.py --verify
 """
 
 import logging
@@ -29,7 +32,7 @@ from getpass import getpass
 from pathlib import Path
 
 import requests
-from garth.exc import GarthException, GarthHTTPError
+from dotenv import load_dotenv
 
 from garminconnect import (
     Garmin,
@@ -53,8 +56,7 @@ def safe_api_call(api_method, *args, **kwargs):
         result = api_method(*args, **kwargs)
         return True, result, None
 
-    except GarthHTTPError as e:
-        # Handle specific HTTP errors gracefully
+    except requests.HTTPError as e:
         error_str = str(e)
         status_code = getattr(getattr(e, "response", None), "status_code", None)
 
@@ -125,8 +127,8 @@ def safe_api_call(api_method, *args, **kwargs):
 
 def get_credentials():
     """Get email and password from environment or user input."""
-    email = os.getenv("EMAIL")
-    password = os.getenv("PASSWORD")
+    email = os.getenv("GARMIN_EMAIL") or os.getenv("EMAIL")
+    password = os.getenv("GARMIN_PASSWORD") or os.getenv("PASSWORD")
 
     if not email:
         email = input("Login email: ")
@@ -136,16 +138,26 @@ def get_credentials():
     return email, password
 
 
+def _resolve_tokenstore_path() -> Path:
+    """Project-local default for GARMINTOKENS (same idea as collector.resolve_tokenstore_path)."""
+    root = Path(__file__).resolve().parent
+    raw = os.getenv("GARMINTOKENS")
+    if not raw:
+        return root / ".garmin-tokens"
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        p = (root / p).resolve()
+    return p
+
+
 def init_api() -> Garmin | None:
     """Initialize Garmin API with authentication and token management."""
 
-    # Configure token storage
-    tokenstore = os.getenv("GARMINTOKENS", "~/.garminconnect")
-    tokenstore_path = Path(tokenstore).expanduser()
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+    tokenstore_path = _resolve_tokenstore_path()
 
     print(f"🔐 Token storage: {tokenstore_path}")
 
-    # Check if token files exist
     if tokenstore_path.exists():
         print("📄 Found existing token directory")
         token_files = list(tokenstore_path.glob("*.json"))
@@ -158,7 +170,6 @@ def init_api() -> Garmin | None:
     else:
         print("📭 No existing token directory found")
 
-    # First try to login with stored tokens
     try:
         print("🔄 Attempting to use saved authentication tokens...")
         garmin = Garmin()
@@ -168,73 +179,38 @@ def init_api() -> Garmin | None:
 
     except (
         FileNotFoundError,
-        GarthHTTPError,
         GarminConnectAuthenticationError,
         GarminConnectConnectionError,
     ):
         print("🔑 No valid tokens found. Requesting fresh login credentials.")
 
-    # Loop for credential entry with retry on auth failure
     while True:
         try:
-            # Get credentials
             email, password = get_credentials()
 
-            print("� Logging in with credentials...")
-            garmin = Garmin(
-                email=email, password=password, is_cn=False, return_on_mfa=True
-            )
-            result1, result2 = garmin.login()
-
-            if result1 == "needs_mfa":
-                print("🔐 Multi-factor authentication required")
-
-                mfa_code = input("Please enter your MFA code: ")
-                print("🔄 Submitting MFA code...")
-
-                try:
-                    garmin.resume_login(result2, mfa_code)
-                    print("✅ MFA authentication successful!")
-
-                except GarthHTTPError as garth_error:
-                    # Handle specific HTTP errors from MFA
-                    error_str = str(garth_error)
-                    if "429" in error_str and "Too Many Requests" in error_str:
-                        print("❌ Too many MFA attempts")
-                        print("💡 Please wait 30 minutes before trying again")
-                        sys.exit(1)
-                    elif "401" in error_str or "403" in error_str:
-                        print("❌ Invalid MFA code")
-                        print("💡 Please verify your MFA code and try again")
-                        continue
-                    else:
-                        # Other HTTP errors - don't retry
-                        print(f"❌ MFA authentication failed: {garth_error}")
-                        sys.exit(1)
-
-                except GarthException as garth_error:
-                    print(f"❌ MFA authentication failed: {garth_error}")
-                    print("💡 Please verify your MFA code and try again")
-                    continue
-
-            # Save tokens for future use
-            garmin.garth.dump(str(tokenstore_path))
-            print(f"💾 Authentication tokens saved to: {tokenstore_path}")
+            print("🔐 Logging in with credentials...")
+            garmin = Garmin(email=email, password=password)
+            garmin.login(str(tokenstore_path))
+            tokenstore_path.mkdir(parents=True, exist_ok=True)
+            garmin.client.dump(str(tokenstore_path))
+            print(f"💾 Session saved to: {tokenstore_path}")
             print("✅ Login successful!")
             return garmin
+
+        except GarminConnectTooManyRequestsError:
+            print("❌ Garmin rate-limited credential login (429).")
+            print(
+                "💡 Run: pip install -r requirements-browser.txt && playwright install chromium"
+            )
+            print("   then: python scripts/garmin_playwright_login.py --verify")
+            return None
 
         except GarminConnectAuthenticationError:
             print("❌ Authentication failed:")
             print("💡 Please check your username and password and try again")
-            # Continue the loop to retry
             continue
 
-        except (
-            FileNotFoundError,
-            GarthHTTPError,
-            GarminConnectConnectionError,
-            requests.exceptions.HTTPError,
-        ) as err:
+        except (GarminConnectConnectionError, requests.exceptions.HTTPError) as err:
             print(f"❌ Connection error: {err}")
             print("💡 Please check your internet connection and try again")
             return None

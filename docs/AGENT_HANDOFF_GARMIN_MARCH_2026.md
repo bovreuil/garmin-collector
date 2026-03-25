@@ -3,6 +3,19 @@
 **Purpose:** Single place for the **next session** to pick up: what we changed, what we tested (with timestamps), **exact repo/upstream versions**, and **recommended next steps**.  
 **Related docs:** [GARMIN_AUTH_LANDSCAPE.md](GARMIN_AUTH_LANDSCAPE.md) (Garth, issues, `react` branch theory), [INTEGRATION.md](INTEGRATION.md) (rehab-platform contract), [plans/garmin-429-recovery.md](plans/garmin-429-recovery.md) (original token-reuse plan).
 
+### Baseline branch
+
+**Use `experiment/react-garmin`** (not `master`) until **browser-based token seeding** (or another fix) is proven in real runs, then merge this branch into `master` intentionally.
+
+Rationale (Mar 2026):
+
+- **Programmatic password login is 429-blocked on both stacks** for this account: legacy **SSO/embed** (Garth-era `master`) and **`/mobile/api/login`** (vendored **`react`**). Switching back to `master` does not remove the need for a **non-password** way to seed tokens.
+- **`react`** tracks what [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) is moving toward: **JWT + `garmin_tokens.json`**, `gc-api`-style session handling, **no Garth**. Tokens from a **real browser** session are plausibly easier to align with that model than with legacy **Garth oauth files** on disk.
+- This repo’s **`collector.py`** is already wired to **`api.client.dump()`** and the JWT layout; `master` would reintroduce **Garth** and duplicate migration work before the next feature (Playwright) even lands.
+- **`master`** currently does **not** include this handoff file or the react vendor in history at the same tip—doc/code truth for the investigation lives on the experiment branch until merge.
+
+**Operator context:** Garmin account has **no MFA**; a future Playwright flow can assume email/password only (still respect occasional Garmin UI or risk prompts).
+
 ---
 
 ## 1. Problem summary
@@ -20,7 +33,7 @@
 | Item | Value |
 |------|--------|
 | **Active integration branch** | **`experiment/react-garmin`** |
-| **Latest commit on that branch (handoff baseline)** | `f7c4e8e` — *docs: upstream/sync commands; browser vs mobile login 429 note* |
+| **Latest commit on that branch (handoff baseline)** | `b27c248` — *docs: agent handoff for Garmin 429* (run `git rev-parse --short HEAD` if ahead) |
 | **Vendored package** | `garminconnect/` from **cyberjunky/python-garminconnect `react`** |
 | **`pyproject.toml` package version** | **0.2.41** |
 | **Dependencies (library)** | **`requests` only** (no **Garth** on this branch) |
@@ -94,7 +107,7 @@ Timestamps are **local to the user** (UK-style logs implied). Use as evidence on
 
 **Deliverable ideas:**
 
-- **`scripts/garmin_playwright_login.py`** (or similar): headed/headless browser login to **`connect.garmin.com`**, extract ticket/tokens, call **`garminconnect.client.Client`Dump** or copy equivalent **`garmin_tokens.json`** into **`.garmin-tokens/`**.
+- **`scripts/garmin_playwright_login.py`**: headed (default) browser login via SSO portal, capture **`di-oauth/refresh`** (or POST with browser cookies), write **`garmin_tokens.json`** under **`GARMINTOKENS`**. Install: `pip install -r requirements-browser.txt` and `playwright install chromium`. Optional **`--verify`** loads tokens and hits **`/userprofile-service/socialProfile`**.
 - Document: run **interactively** when tokens expire; keep **`collector`** headless.
 
 **Constraints:**

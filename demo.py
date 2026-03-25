@@ -15,6 +15,10 @@ Environment Variables (optional):
 export EMAIL=<your garmin email address>
 export PASSWORD=<your garmin password>
 export GARMINTOKENS=<path to token storage>
+
+garmin-collector fork: This file still imports Garth for legacy demo paths. For the
+vendored upstream react (JWT) stack use example.py or collector.py, and
+scripts/garmin_playwright_login.py if programmatic login returns HTTP 429.
 """
 
 import datetime

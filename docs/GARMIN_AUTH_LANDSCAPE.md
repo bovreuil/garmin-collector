@@ -4,7 +4,7 @@ This document summarizes **how this project talks to Garmin**, what **Garth** is
 
 **Concrete test timeline, SHAs, and next-agent checklist:** [AGENT_HANDOFF_GARMIN_MARCH_2026.md](AGENT_HANDOFF_GARMIN_MARCH_2026.md).
 
-**This repository:** On branch **`experiment/react-garmin`**, the vendored **`garminconnect/`** package and root **`pyproject.toml`** track **[cyberjunky/python-garminconnect](https://github.com/cyberjunky/python-garminconnect) `upstream/react`** (no **Garth** dependency; JWT / `garmin_tokens.json` session files). **`collector.py`** uses **`api.client.dump()`** after login. Merge to **`master`** when you are satisfied with real-world runs; stay on **`master`** for the older Garth-based vendor until then.
+**This repository:** On branch **`experiment/react-garmin`**, the vendored **`garminconnect/`** package and root **`pyproject.toml`** track **[cyberjunky/python-garminconnect](https://github.com/cyberjunky/python-garminconnect) `upstream/react`** (no **Garth** dependency; JWT / `garmin_tokens.json` session files). **`collector.py`** uses **`api.client.dump()`** after login. **Baseline choice (Mar 2026):** stay on this branch for ongoing auth work—programmatic login is 429 on Garth and react paths alike, while the JWT stack is the better target for **browser-assisted** token seeding; see [AGENT_HANDOFF_GARMIN_MARCH_2026.md — Baseline branch](AGENT_HANDOFF_GARMIN_MARCH_2026.md#baseline-branch). Merge to **`master`** when real-world collection is stable; **`master`** until then keeps the older Garth-based vendor and does not carry the latest investigation docs at the same tip.
 
 ### Staying aligned with `upstream/react`
 

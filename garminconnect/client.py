@@ -58,7 +58,7 @@ class Client:
             "Accept": "application/json",
             "connect-csrf-token": str(self.csrf_token),
             "Origin": self._connect,
-            "Referer": f"{self._connect}/modern/",
+            "Referer": f"{self._connect}/app/home",
             "DI-Backend": f"connectapi.{self.domain}",
         }
 
@@ -181,7 +181,7 @@ class Client:
             headers={
                 "Accept": "application/json",
                 "NK": "NT",
-                "Referer": f"{self._connect}/modern/",
+                "Referer": f"{self._connect}/app/home",
             },
         )
 
@@ -210,7 +210,7 @@ class Client:
                     "Accept": "application/json",
                     "NK": "NT",
                     "connect-csrf-token": self.csrf_token,
-                    "Referer": f"{self._connect}/modern/",
+                    "Referer": f"{self._connect}/app/home",
                 },
                 timeout=10,
             )

@@ -196,7 +196,7 @@ Per-activity TRIMP is computed inside rehab-platform from `heart_rate_series` wh
 - **Platform URL:** Collector env often named like `REHAB_PLATFORM_URL` pointing at the public HTTPS origin (no trailing slash issues — use consistent URL building in collector code).
 - **Jobs creation:** Admins trigger collection from rehab-platform **`/data`** (`POST /collect-data`), which inserts `background_jobs` with `job_type='collect_data'` and `status='pending'`.
 - **Troubleshooting 401:** Align `SHARED_SECRET` and base URL; confirm `Authorization: Bearer ...` spelling.
-- **Garmin OAuth tokens:** The collector persists Garth tokens on disk (see `GARMINTOKENS` in `env.example`) — typically a directory **inside the project clone** (e.g. `.garmin-tokens/`, gitignored) on each machine (dev MacBook vs prod mini-ITX). That avoids a full Garmin SSO login on every job and reduces **429** throttling on `sso.garmin.com`. Permissions on that directory should be restrictive (same idea as upstream python-garminconnect: treat like secrets).
+- **Garmin session files:** The collector persists JWT session data on disk (see `GARMINTOKENS` in `env.example`) — e.g. **`garmin_tokens.json`** under **`.garmin-tokens/`** on the **upstream `react`** stack — inside each project clone (dev vs prod mini-ITX). That avoids repeating full login on every job. If **programmatic** password login returns **429**, seed tokens with **`scripts/garmin_playwright_login.py`** (see README), then run `collector.py` as usual. Treat the token directory like secrets; restrict permissions where the OS allows.
 - **Job status on Garmin login / rate limits:** If the collector cannot authenticate or hits **429** on Garmin (SSO or Connect API), it should set the job to **`failed`** with `error_message` set (not `completed` with empty data). Missing heart rate data for a date without a transport error may still be reported as `completed` with `success: false` in `result` per existing behavior.
 
 For full production checklist (Gunicorn workers, Dropbox, OAuth, etc.), see rehab-platform **OPERATIONS.md** — most of it applies only to the web app, not the collector.
@@ -205,7 +205,7 @@ For full production checklist (Gunicorn workers, Dropbox, OAuth, etc.), see reha
 
 ## 7. Upstream library
 
-Garmin API access in the collector is expected to align with **[python-garminconnect](https://github.com/cyberjunky/python-garminconnect)** (historically Garth-based OAuth/SSO, token storage, endpoint wrappers). Upstream changes to response shapes may require updates to the **payload mapping** in the collector so section 5 still holds.
+Garmin API access in the collector aligns with **[python-garminconnect](https://github.com/cyberjunky/python-garminconnect)**. On branch **`experiment/react-garmin`**, the vendored library uses **JWT / `garmin_tokens.json`** (not classic Garth oauth files). Upstream changes to response shapes may require updates to the **payload mapping** in the collector so section 5 still holds.
 
 For **March 2026 auth disruptions**, **Garth**, issue threads, and the upstream **`react`** branch experiment, see **[GARMIN_AUTH_LANDSCAPE.md](GARMIN_AUTH_LANDSCAPE.md)**. **Test timeline, commit SHAs, next-agent steps (browser token path):** **[AGENT_HANDOFF_GARMIN_MARCH_2026.md](AGENT_HANDOFF_GARMIN_MARCH_2026.md)**.
 

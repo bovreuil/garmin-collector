@@ -44,7 +44,19 @@ Garmin OAuth tokens should live **inside each clone** (see `GARMINTOKENS` below)
 pip install -r requirements.txt
 ```
 
-This installs dependencies and the **local** `garminconnect` package from this repository (`-e .` in `requirements.txt`), so the vendored library and `garth` versions stay aligned with `pyproject.toml`.
+This installs dependencies and the **local** `garminconnect` package from this repository (`-e .` in `requirements.txt`), so the vendored **`garminconnect`** matches `pyproject.toml` (upstream **`react`** uses JWT on disk — **no Garth**).
+
+**Browser login (HTTP 429 on password login):** install Playwright extras, then Chromium:
+
+```bash
+pip install -r requirements-browser.txt
+playwright install chromium
+python scripts/garmin_playwright_login.py --verify
+```
+
+That writes `garmin_tokens.json` under `GARMINTOKENS` (e.g. `.garmin-tokens/`) in the same shape `collector.py` expects. Run it on the **same machine** as the collector when sessions may be IP-bound.
+
+If the SSO page shows a red **“unexpected error”** banner (or JWT capture still fails), try in order: **`python scripts/garmin_playwright_login.py --chrome --verify`** (requires [Google Chrome](https://www.google.com/chrome/) installed), **`--no-submit`** (script fills the form; you click Sign in), **`--entry portal`**, or **`--manual`** (you sign in entirely by hand; waits up to 10 minutes). Check `garmin-login-debug.png` under your token directory if the script saves a screenshot.
 
 ### 2. Configure Environment Variables
 
@@ -61,7 +73,7 @@ Edit `.env` with your configuration:
 GARMIN_EMAIL=your.email@example.com
 GARMIN_PASSWORD=your_password
 
-# Garth OAuth tokens — directory inside this repo (gitignored). See env.example.
+# Garmin session directory (gitignored); holds garmin_tokens.json on react vendor. See env.example.
 GARMINTOKENS=.garmin-tokens
 
 # Rehab Platform server configuration
@@ -238,7 +250,8 @@ python collector.py --poll >> collector.log 2>&1
 * Check that the shared secret matches between collector and server
 * Ensure the server URL is accessible from the collector machine
 * Ensure `GARMINTOKENS` points at a **persistent directory inside the project clone** (see `env.example`). Without saved tokens, every job can trigger a full Garmin login and hit **429** throttling on SSO even at modest daily volume
-* If you use MFA, you may need a one-time interactive login (e.g. run `example.py` with the same `GARMINTOKENS`) to create tokens before headless `collector.py --poll` works reliably
+* If programmatic login hits **429**, use `scripts/garmin_playwright_login.py` (see setup above) instead of relying on `GARMIN_PASSWORD` in the collector until tokens exist
+* If you later enable MFA, use a headed browser flow or Garmin’s prompts; this repo assumes password-only accounts for the Playwright helper
 
 ### Network Issues
 
@@ -266,6 +279,14 @@ python collector.py --poll >> collector.log 2>&1
 * **401 Unauthorized**: Align `SHARED_SECRET` with rehab-platform (`API_CONFIG` / env), base URL, and `Authorization: Bearer ...` spelling ([docs/INTEGRATION.md](docs/INTEGRATION.md) §3)
 * **Connection refused**: Verify `REHAB_PLATFORM_URL` is correct
 * **Task not starting**: Check Task Scheduler logs and ensure auto-login is configured
+
+### Validation after auth or token changes
+
+Cross-check with [docs/INTEGRATION.md](docs/INTEGRATION.md): shared secret on `GET /api/jobs/pending`, `POST .../status`, and `POST .../data`.
+
+1. `GARMINTOKENS` points at a persistent directory (e.g. `.garmin-tokens/`) and contains **`garmin_tokens.json`** after `scripts/garmin_playwright_login.py` or a successful login.
+2. Run `python collector.py --poll` (or process one job): logs should show routine **token reuse**, not a full credential login on every job.
+3. On rehab-platform, the job reaches **`completed`** with expected data, or **`failed`** with a clear `error_message` if Garmin still rejects the session.
 
 ## Security Notes
 

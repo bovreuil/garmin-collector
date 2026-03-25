@@ -76,6 +76,9 @@ example = [
     "requests",
     "readchar",
 ]
+browser = [
+    "playwright>=1.49.0",
+]
 
 [tool.pdm]
 distribution = true
