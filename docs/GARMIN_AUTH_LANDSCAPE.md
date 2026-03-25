@@ -4,6 +4,24 @@ This document summarizes **how this project talks to Garmin**, what **Garth** is
 
 **This repository:** On branch **`experiment/react-garmin`**, the vendored **`garminconnect/`** package and root **`pyproject.toml`** track **[cyberjunky/python-garminconnect](https://github.com/cyberjunky/python-garminconnect) `upstream/react`** (no **Garth** dependency; JWT / `garmin_tokens.json` session files). **`collector.py`** uses **`api.client.dump()`** after login. Merge to **`master`** when you are satisfied with real-world runs; stay on **`master`** for the older Garth-based vendor until then.
 
+### Staying aligned with `upstream/react`
+
+After `git remote add upstream https://github.com/cyberjunky/python-garminconnect.git` (once), refresh and compare:
+
+```bash
+git fetch upstream
+git diff upstream/react -- garminconnect/ pyproject.toml
+```
+
+An **empty diff** means your vendored library already matches the tip of **`react`**. To **reset** those paths to upstream:
+
+```bash
+git checkout upstream/react -- garminconnect/ pyproject.toml
+pip install -r requirements.txt
+```
+
+If **connect.garmin.com works in a normal browser** but **`429 Rate Limit`** still appears when the collector calls **`/mobile/api/login`**, Garmin is blocking that **programmatic** path for your account or IP. Waiting does not always clear it; the practical fallback is **browser-based authentication** (e.g. Playwright) to obtain tokens, then **`load` / `dump`** in the same **`GARMINTOKENS`** directory the collector uses — see discussion in **[matin/garth#217](https://github.com/matin/garth/issues/217)**.
+
 ---
 
 ## How garmin-collector authenticates today
