@@ -349,6 +349,11 @@ class Garmin:
                     f"API client error ({status}): {e}"
                 ) from e
             raise GarminConnectConnectionError(f"HTTP error: {e}") from e
+        except GarminConnectAuthenticationError:
+            # e.g. Client.get_api_headers() "Not authenticated" — do not wrap as ConnectionError
+            raise
+        except GarminConnectTooManyRequestsError:
+            raise
         except Exception as e:
             logger.exception("Connection error during connectapi path=%s", path)
             raise GarminConnectConnectionError(f"Connection error: {e}") from e

@@ -50,6 +50,8 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 
 **Why:** Otherwise the first **`get_heart_rates`** could fail with 401, get swallowed inside **`_collect_garmin_data_body`** as a generic error, and the job could be marked **completed** with “no data” while the on-disk JWT was still stale on the next run.
 
+**Related:** If **`Client.get_api_headers()`** raises **`GarminConnectAuthenticationError("Not authenticated")`** (JWT/CSRF missing before any HTTP call), **`Garmin.connectapi`** must **re-raise** that type instead of wrapping it as **`Connection error: …`**, or the same wrong “completed / no data” path runs on Windows.
+
 ---
 
 ## 3. Important files

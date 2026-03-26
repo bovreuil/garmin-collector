@@ -503,8 +503,9 @@ class GarminCollector:
         except (GarminConnectAuthenticationError, GarminConnectTooManyRequestsError):
             raise
         except GarminConnectConnectionError as e:
-            # e.g. API Error 401 if status detection missed — treat like auth for outer retry
-            if re.search(r"API Error\s+401\b", str(e)):
+            # Legacy wraps or missed 401 text — treat like auth for outer retry
+            err_s = str(e).lower()
+            if re.search(r"API Error\s+401\b", str(e)) or "not authenticated" in err_s:
                 raise GarminConnectAuthenticationError(str(e)) from e
             import traceback
             error_traceback = traceback.format_exc()
