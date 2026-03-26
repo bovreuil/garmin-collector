@@ -58,7 +58,7 @@ python scripts/garmin_playwright_login.py --verify
 
 That writes `garmin_tokens.json` under `GARMINTOKENS` (e.g. `.garmin-tokens/`) in the same shape `collector.py` expects. Run it on the **same machine** as the collector when sessions may be IP-bound.
 
-**`GARMIN_BROWSER_LOGIN` — when the collector may open a browser:** Playwright is used to refresh Garmin sessions when password login returns **429**, when on-disk tokens are **rejected or expired (401)**, and in related recovery paths. That only happens if **`GARMIN_BROWSER_LOGIN=1`** (or another truthy value) **or** the process stdin is a **TTY** (e.g. you started `python collector.py --poll` yourself in a terminal). **Scheduled tasks and most background launches are not a TTY** — on a Windows mini-ITX using Task Scheduler + a `.bat` that only does `cd` + `python collector.py --poll`, set **`GARMIN_BROWSER_LOGIN=1`** in **`.env`** next to `collector.py` so recovery can run unattended when tokens need reseeding (you still need to be at the machine if the browser shows a Garmin challenge). **`GARMIN_PLAYWRIGHT_CHROME=1`** passes **`--chrome`**. See **Deployment → Windows 11 mini-ITX** and `env.example`. Install browser deps as above.
+**`GARMIN_BROWSER_LOGIN` (optional):** Playwright can refresh Garmin sessions when password login returns **429**, tokens are **stale/expired**, etc. By default the collector allows that when **`GARMIN_BROWSER_LOGIN=1`** **or** when **`sys.stdin.isatty()`** is true (interactive terminal — many Windows **Task Scheduler** + `.bat` runs still satisfy this). Set **`GARMIN_BROWSER_LOGIN=1`** only if your environment **never** opens a browser during recovery; set **`0`** to disable auto-browser entirely (manual `scripts/garmin_playwright_login.py` only). **`GARMIN_PLAYWRIGHT_CHROME=1`** passes **`--chrome`**. See `env.example`. Install browser deps as above.
 
 If the SSO page shows a red **“unexpected error”** banner (or JWT capture still fails), try in order: **`python scripts/garmin_playwright_login.py --chrome --verify`** (requires [Google Chrome](https://www.google.com/chrome/) installed), **`--no-submit`** (script fills the form; you click Sign in), **`--entry portal`**, or **`--manual`** (you sign in entirely by hand; waits up to 10 minutes). Check `garmin-login-debug.png` under your token directory if the script saves a screenshot.
 
@@ -87,7 +87,7 @@ SHARED_SECRET=your_shared_secret_here
 # Polling configuration (seconds between polls; production often ~30)
 POLL_INTERVAL=60
 
-# If the collector runs under Task Scheduler (non-interactive), enable browser recovery:
+# Optional: force collector-triggered Playwright if your process has no TTY (see env.example)
 # GARMIN_BROWSER_LOGIN=1
 ```
 
@@ -258,7 +258,7 @@ python collector.py --poll >> collector.log 2>&1
 * Check that the shared secret matches between collector and server
 * Ensure the server URL is accessible from the collector machine
 * Ensure `GARMINTOKENS` points at a **persistent directory inside the project clone** (see `env.example`). Without saved tokens, every job can trigger a full Garmin login and hit **429** throttling on SSO even at modest daily volume
-* If programmatic login hits **429** or tokens expire but **no browser window** appears, check **`.env`**: for Task Scheduler / `.bat` runs, set **`GARMIN_BROWSER_LOGIN=1`** (stdin is usually not a TTY). Or run `scripts/garmin_playwright_login.py` manually (see setup above)
+* If programmatic login hits **429** or tokens expire but **no browser window** appears, set **`GARMIN_BROWSER_LOGIN=1`** in **`.env`** or run `scripts/garmin_playwright_login.py` manually (see setup above)
 * If you later enable MFA, use a headed browser flow or Garmin’s prompts; this repo assumes password-only accounts for the Playwright helper
 
 ### Network Issues

@@ -55,12 +55,9 @@ def resolve_tokenstore_path() -> Path:
 def _browser_login_enabled() -> bool:
     """When True, collector may run scripts/garmin_playwright_login.py for browser token seeding.
 
-    Used after 429, after clearing expired on-disk tokens, etc. Windows Task Scheduler
-    (“Start a program” + .bat) usually has no TTY on stdin → set GARMIN_BROWSER_LOGIN=1.
-
     - GARMIN_BROWSER_LOGIN=0|off|false: never
     - GARMIN_BROWSER_LOGIN=1|on|true: always
-    - unset: only if stdin is a TTY (interactive terminal)
+    - unset: if stdin is a TTY (set GARMIN_BROWSER_LOGIN=1 if recovery never runs on your host)
     """
     v = os.getenv("GARMIN_BROWSER_LOGIN", "").strip().lower()
     if v in ("0", "false", "no", "off"):
@@ -207,7 +204,7 @@ class GarminCollector:
                 logger.error(
                     "Garmin login rate limited (429). Save tokens under %s (run "
                     "scripts/garmin_playwright_login.py), wait, or set "
-                    "GARMIN_BROWSER_LOGIN=1 when not attached to a TTY.",
+                    "GARMIN_BROWSER_LOGIN=1 if your environment has no TTY for recovery.",
                     path_str,
                 )
                 raise
