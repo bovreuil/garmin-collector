@@ -53,10 +53,13 @@ def resolve_tokenstore_path() -> Path:
 
 
 def _browser_login_enabled() -> bool:
-    """When True, collector may run scripts/garmin_playwright_login.py after programmatic 429.
+    """When True, collector may run scripts/garmin_playwright_login.py for browser token seeding.
+
+    Used after 429, after clearing expired on-disk tokens, etc. Windows Task Scheduler
+    (“Start a program” + .bat) usually has no TTY on stdin → set GARMIN_BROWSER_LOGIN=1.
 
     - GARMIN_BROWSER_LOGIN=0|off|false: never
-    - GARMIN_BROWSER_LOGIN=1|on|true: always (e.g. systemd: set explicitly)
+    - GARMIN_BROWSER_LOGIN=1|on|true: always
     - unset: only if stdin is a TTY (interactive terminal)
     """
     v = os.getenv("GARMIN_BROWSER_LOGIN", "").strip().lower()

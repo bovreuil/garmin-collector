@@ -71,7 +71,7 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 |----------|---------|
 | `GARMIN_EMAIL` / `GARMIN_PASSWORD` | Required for programmatic path and for Playwright auto-fill |
 | `GARMINTOKENS` | Directory for `garmin_tokens.json` (default `.garmin-tokens` under repo root) |
-| `GARMIN_BROWSER_LOGIN` | `1` = always allow collector-triggered browser seed; `0` = never; unset = only if stdin is a TTY |
+| `GARMIN_BROWSER_LOGIN` | `1` = always allow collector-triggered Playwright; `0` = never; **unset** = only if stdin is a **TTY**. Windows Task Scheduler + `.bat` is **not** a TTY — use **`1`** on mini-ITX unless you only ever reseed manually. |
 | `GARMIN_PLAYWRIGHT_CHROME` | When set truthy, collector passes `--chrome` to the helper (system Google Chrome) |
 
 `GARMINTOKENS` is temporarily **removed** from the environment around `api.login` inside the collector so the library resolves the path argument explicitly (avoids double-application of env defaults).
