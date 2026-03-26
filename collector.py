@@ -9,6 +9,7 @@ Garmin data when jobs are available.
 import json
 import logging
 import os
+import re
 import requests
 import subprocess
 import sys
@@ -69,6 +70,13 @@ def _browser_login_enabled() -> bool:
 _PLAYWRIGHT_SCRIPT = _PROJECT_ROOT / "scripts" / "garmin_playwright_login.py"
 
 
+def _token_json_path(tokenstore: Path) -> Path:
+    """Same file resolution as garminconnect.client.Client.load/dump."""
+    if tokenstore.is_dir() or not tokenstore.name.endswith(".json"):
+        return tokenstore / "garmin_tokens.json"
+    return tokenstore
+
+
 class GarminCollector:
     """Handles Garmin data collection and job processing."""
     
@@ -97,6 +105,19 @@ class GarminCollector:
         self._tokenstore_path = resolve_tokenstore_path()
         self._garmin: Optional[Garmin] = None
         logger.info("Garmin token storage directory: %s", self._tokenstore_path)
+
+    def _clear_stored_garmin_tokens(self) -> None:
+        """Remove garmin_tokens.json so login does not reload an expired session."""
+        p = _token_json_path(self._tokenstore_path)
+        try:
+            if p.is_file():
+                p.unlink()
+                logger.warning(
+                    "Removed stale token file %s (e.g. expired JWT); next login will re-authenticate",
+                    p,
+                )
+        except OSError as err:
+            logger.warning("Could not remove token file %s: %s", p, err)
 
     def _invoke_playwright_seeding(self) -> None:
         """Run browser login helper; writes garmin_tokens.json under GARMINTOKENS."""
@@ -261,6 +282,7 @@ class GarminCollector:
         logger.info(f"Starting data collection for {target_date}")
 
         retried_auth = False
+        retried_login_after_clear = False
 
         while True:
             try:
@@ -277,6 +299,27 @@ class GarminCollector:
                     ),
                     'data_found': False,
                 }
+            except GarminConnectAuthenticationError as e:
+                if retried_login_after_clear:
+                    logger.error(
+                        "Garmin login failed again after clearing token file: %s",
+                        e,
+                        exc_info=True,
+                    )
+                    return {
+                        'success': False,
+                        'failure_kind': 'garmin_login',
+                        'message': f"Error connecting to Garmin: {e}",
+                        'data_found': False,
+                    }
+                logger.warning(
+                    "Garmin authentication failed at login (e.g. expired tokens on disk); "
+                    "removing saved session and retrying once"
+                )
+                retried_login_after_clear = True
+                self._clear_stored_garmin_tokens()
+                self.invalidate_garmin_client()
+                continue
             except Exception as e:
                 logger.error(f"Error connecting to Garmin: {e}", exc_info=True)
                 return {
@@ -300,9 +343,11 @@ class GarminCollector:
                         'data_found': False,
                     }
                 logger.warning(
-                    "Garmin authentication error during fetch; clearing session and retrying once"
+                    "Garmin authentication error during fetch (e.g. expired JWT); "
+                    "clearing saved tokens and session, retrying once"
                 )
                 retried_auth = True
+                self._clear_stored_garmin_tokens()
                 self.invalidate_garmin_client()
                 continue
             except GarminConnectTooManyRequestsError as e:
@@ -441,6 +486,20 @@ class GarminCollector:
 
         except (GarminConnectAuthenticationError, GarminConnectTooManyRequestsError):
             raise
+        except GarminConnectConnectionError as e:
+            # e.g. API Error 401 if status detection missed — treat like auth for outer retry
+            if re.search(r"API Error\s+401\b", str(e)):
+                raise GarminConnectAuthenticationError(str(e)) from e
+            import traceback
+            error_traceback = traceback.format_exc()
+            logger.error(f"Error collecting data for {target_date}: {e}")
+            logger.error(f"Traceback: {error_traceback}")
+            return {
+                'success': False,
+                'message': f"Error collecting data: {str(e)}",
+                'data_found': False,
+                'traceback': error_traceback
+            }
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()

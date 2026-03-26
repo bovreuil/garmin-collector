@@ -328,6 +328,9 @@ class Garmin:
                 status = getattr(getattr(e, "response", None), "status_code", None)
             else:
                 status = getattr(getattr(e, "response", None), "status_code", None)
+            # client._run_request raises ConnectionError with text "API Error 401" and no .response
+            if status is None and re.search(r"API Error\s+401\b", str(e)):
+                status = 401
 
             logger.exception(
                 "API call failed for path '%s': %s (status=%s)", path, e, status

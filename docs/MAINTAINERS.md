@@ -44,6 +44,12 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 
 **Why:** A prior bug hid 429 behind a generic “Login failed” type and broke targeted handling.
 
+### 2.6 Expired session (401 on wellness / `gc-api`)
+
+**What:** Tokens can expire after some hours. `Client._run_request` raises **`GarminConnectConnectionError("API Error 401 …")`** without attaching **`response`**, so status code was missing. **`Garmin.connectapi`** now treats that message as **401** and raises **`GarminConnectAuthenticationError`**. The collector deletes **`garmin_tokens.json`**, clears the cached client, and retries once (fresh password login; if that returns **429**, the usual Playwright path applies when enabled).
+
+**Why:** Otherwise the first **`get_heart_rates`** could fail with 401, get swallowed inside **`_collect_garmin_data_body`** as a generic error, and the job could be marked **completed** with “no data” while the on-disk JWT was still stale on the next run.
+
 ---
 
 ## 3. Important files
@@ -52,7 +58,7 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 |------|------|
 | `collector.py` | Polling, job lifecycle, `get_garmin_api`, Playwright fallback |
 | `garminconnect/client.py` | Mobile login, `load`/`dump`, `connectapi` headers (`Referer` → `/app/home`) |
-| `garminconnect/__init__.py` | `Garmin.login`, profile/settings after login, 429 re-raise |
+| `garminconnect/__init__.py` | `Garmin.connectapi` (401 detection), `Garmin.login`, 429 re-raise |
 | `scripts/garmin_playwright_login.py` | Headed login, token capture, `--verify` |
 | `requirements.txt` | App + editable vendored package |
 | `requirements-browser.txt` | Playwright |
