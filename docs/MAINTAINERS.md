@@ -46,7 +46,7 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 
 ### 2.6 Expired session (401 on wellness / `gc-api`)
 
-**What:** Tokens can expire after some hours. `Client._run_request` raises **`GarminConnectConnectionError("API Error 401 …")`** without attaching **`response`**, so status code was missing. **`Garmin.connectapi`** now treats that message as **401** and raises **`GarminConnectAuthenticationError`**. The collector deletes **`garmin_tokens.json`**, clears the cached client, and retries once (fresh password login; if that returns **429**, the usual Playwright path applies when enabled).
+**What:** Tokens can expire after some hours. `Client._run_request` raises **`GarminConnectConnectionError("API Error 401 …")`** without attaching **`response`**, so status code was missing. **`Garmin.connectapi`** now treats that message as **401** and raises **`GarminConnectAuthenticationError`**. The collector deletes **`garmin_tokens.json`**, clears the cached client, and retries once. When **`GARMIN_BROWSER_LOGIN`** is enabled or stdin is a TTY, it runs **Playwright immediately** after clearing stale tokens (skipping a password attempt that often returns **429** for some accounts); otherwise it tries programmatic login first.
 
 **Why:** Otherwise the first **`get_heart_rates`** could fail with 401, get swallowed inside **`_collect_garmin_data_body`** as a generic error, and the job could be marked **completed** with “no data” while the on-disk JWT was still stale on the next run.
 

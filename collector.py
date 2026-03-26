@@ -119,6 +119,16 @@ class GarminCollector:
         except OSError as err:
             logger.warning("Could not remove token file %s: %s", p, err)
 
+    def _reseed_via_browser_after_token_clear(self, reason: str) -> None:
+        """If browser seed is allowed, do it now and skip a password login that often returns 429."""
+        if not _browser_login_enabled():
+            return
+        logger.info(
+            "Opening browser to seed tokens (%s); skipping programmatic login",
+            reason,
+        )
+        self._invoke_playwright_seeding()
+
     def _invoke_playwright_seeding(self) -> None:
         """Run browser login helper; writes garmin_tokens.json under GARMINTOKENS."""
         if not _PLAYWRIGHT_SCRIPT.is_file():
@@ -319,6 +329,9 @@ class GarminCollector:
                 retried_login_after_clear = True
                 self._clear_stored_garmin_tokens()
                 self.invalidate_garmin_client()
+                self._reseed_via_browser_after_token_clear(
+                    "session on disk was rejected at login"
+                )
                 continue
             except Exception as e:
                 logger.error(f"Error connecting to Garmin: {e}", exc_info=True)
@@ -349,6 +362,9 @@ class GarminCollector:
                 retried_auth = True
                 self._clear_stored_garmin_tokens()
                 self.invalidate_garmin_client()
+                self._reseed_via_browser_after_token_clear(
+                    "session rejected during data fetch"
+                )
                 continue
             except GarminConnectTooManyRequestsError as e:
                 logger.error("Garmin API rate limited during fetch: %s", e, exc_info=True)
