@@ -207,7 +207,7 @@ For full production checklist (Gunicorn workers, Dropbox, OAuth, etc.), see reha
 
 Garmin API access in the collector aligns with **[python-garminconnect](https://github.com/cyberjunky/python-garminconnect)**. The vendored library tracks **`react`** (**JWT / `garmin_tokens.json`**, not classic Garth oauth files). Upstream changes to response shapes may require updates to the **payload mapping** in the collector so section 5 still holds.
 
-**Maintainer-oriented auth notes (Playwright, 429, env, sync):** **[MAINTAINERS.md](MAINTAINERS.md)**. **Garth**, issue threads (#332, #337), and **garth#217:** **[GARMIN_AUTH_LANDSCAPE.md](GARMIN_AUTH_LANDSCAPE.md)**.
+**Maintainer-oriented auth notes (Playwright, 429, env, sync):** **[MAINTAINERS.md](MAINTAINERS.md)** — **§6** documents **failure modes**, log signatures, **`failure_kind`**, and **“completed with no data”** misclassification. **Garth**, issue threads (#332, #337), and **garth#217:** **[GARMIN_AUTH_LANDSCAPE.md](GARMIN_AUTH_LANDSCAPE.md)**.
 
 ---
 

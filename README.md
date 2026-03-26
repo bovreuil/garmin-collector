@@ -252,6 +252,8 @@ python collector.py --poll >> collector.log 2>&1
 
 ## Troubleshooting
 
+**Garmin failures and job status:** See **[docs/MAINTAINERS.md §6 — Failure modes, log signatures, and job status](docs/MAINTAINERS.md#6-failure-modes-log-signatures-and-job-status)** (429, 401, `Not authenticated`, TLS reset **10054**, `failure_kind`, vs **“completed with no data”** misclassification).
+
 ### Authentication Issues
 
 * Verify your Garmin credentials are correct

@@ -94,7 +94,41 @@ Empty diff ⇒ vendored tree matches upstream `react` for those paths. Borrow up
 
 ---
 
-## 6. Validation after auth or library changes
+## 6. Failure modes, log signatures, and job status
+
+This section lists **real failures** seen in production/dev (March 2026) and how **`collector.py`** / **`run_job`** should treat them. Rehab-platform jobs should end **`failed`** with `error_message` when Garmin or transport failed—not **`completed`** with an empty result unless there truly was no HR data.
+
+### 6.1 `failure_kind` → platform job
+
+| `failure_kind` (in `collect_garmin_data` result) | `run_job` sets platform status | Typical cause |
+|--------------------------------------------------|-------------------------------|---------------|
+| `garmin_login` | **`failed`** | Cannot establish session (credentials, MFA, repeated auth failure after clearing tokens). |
+| `garmin_rate_limit` | **`failed`** | **429** from SSO/mobile login or from **`gc-api`** during fetch. |
+| `garmin_auth_during_fetch` | **`failed`** | Auth still bad after **one** retry (clear tokens + browser / re-login). |
+| `garmin_network` | **`failed`** | Transient **TLS/socket** drop (**two** attempts); still broken (e.g. WinError **10054**, **Connection aborted**). |
+| *(absent)* + `success: False` | **`completed`** * | **Only** for “soft” outcomes (e.g. **no heart rate** for that date without a transport/auth exception). Do not use this path for wrapped connection/auth errors. |
+
+\* **Historical footgun:** Before hardened handling, **`API Error 401`**, **`Not authenticated`**, and **connection resets** were sometimes returned as generic `success: False` **without** `failure_kind`, so **`run_job`** misclassified as **“completed with no data”**. Current code maps these to auth retry, **`garmin_network`**, or re-raised types as appropriate.
+
+### 6.2 Symptom → meaning → collector behaviour
+
+| Log / exception pattern | Meaning | Expected recovery |
+|-------------------------|---------|-------------------|
+| **`429`** / **`GarminConnectTooManyRequestsError`** on **`mobile/api/login`** (or wrapped login message) | Programmatic login throttled. | Collector may run **Playwright** (if `GARMIN_BROWSER_LOGIN` or TTY); writes **`garmin_tokens.json`**; retries login. |
+| **`API Error 401`** on **`dailyHeartRate`** (etc.) | Expired or rejected **JWT**/session for **`gc-api`**. | **`Garmin.connectapi`** → **`GarminConnectAuthenticationError`**. Collector **deletes** token file, invalidates client, may open browser **without** a doomed password hop, retries **once**. |
+| **`Not authenticated`** from **`get_api_headers()`** (before HTTP) | **`jwt_web`** / **`csrf_token`** missing in memory (e.g. bad refresh, partial load). | Must **not** be wrapped as generic **`Connection error`** in **`Garmin.connectapi`**; must propagate **`GarminConnectAuthenticationError`** so the same **clear + reseed** path runs (March 2026 Windows). |
+| **`Connection error:`** / **`Connection aborted`** / **`ConnectionResetError`** / **`10054`** / **`ProtocolError`** | Remote or edge **closed the socket**; often transient. | **`TransientGarminNetworkError`**: **invalidate** client, **sleep ~2s**, retry **once**; if still failing → **`garmin_network`**, job **`failed`**. |
+| Playwright **`OK: wrote … garmin_tokens.json`** | Browser session captured. | Next **`login(path)`** loads file; collection continues. |
+
+### 6.3 Operator checklist when jobs look wrong
+
+1. Confirm rehab-platform job is **`failed`** with a useful **`error_message`** when Garmin said no—not **`completed`** with empty payload for a transport/auth error.
+2. If **browser never opens** on recovery, see **`GARMIN_BROWSER_LOGIN`** / TTY notes in **§4** and `env.example`.
+3. If failures persist after token reseed, check **home IP / VPN**, Garmin account status, and `garmin-login-debug.png` from Playwright.
+
+---
+
+## 7. Validation after auth or library changes
 
 1. `.env` has `GARMINTOKENS` and matching rehab-platform `SHARED_SECRET` / URL.
 2. Delete or keep `garmin_tokens.json` depending on what you are testing (fresh login vs reuse).
@@ -103,12 +137,12 @@ Empty diff ⇒ vendored tree matches upstream `react` for those paths. Borrow up
 
 ---
 
-## 7. Investigation history (short)
+## 8. Investigation history (short)
 
 March 2026: **429** on Garth/SSO and on **`react`** `mobile/api/login` for this account; waiting and network changes did not restore programmatic login. **Browser** login remained viable. Response: ship Playwright seeding, JWT persistence, collector auto-fallback, faster post-login polling in the script (no fixed 45s wait on empty `di-oauth` JSON). Older dated logs and SHAs were in a handoff doc; **this file** is the living substitute.
 
 ---
 
-## 8. Disclaimer
+## 9. Disclaimer
 
 Garmin terms may restrict unofficial API access. This project is for **personal** engineering; not legal advice.
