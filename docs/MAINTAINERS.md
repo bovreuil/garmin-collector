@@ -52,6 +52,8 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 
 **Related:** If **`Client.get_api_headers()`** raises **`GarminConnectAuthenticationError("Not authenticated")`** (JWT/CSRF missing before any HTTP call), **`Garmin.connectapi`** must **re-raise** that type instead of wrapping it as **`Connection error: …`**, or the same wrong “completed / no data” path runs on Windows.
 
+**Transient TCP/TLS drops** (e.g. Windows **10054** “forcibly closed by remote host”, **`Connection aborted`**) are classified in **`collector.py`** as **`TransientGarminNetworkError`**: **one** retry after **`invalidate_garmin_client()`** and a short sleep; then **`failure_kind: garmin_network`** and job **`failed`** if it persists — not “completed with no data”.
+
 ---
 
 ## 3. Important files

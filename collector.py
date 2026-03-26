@@ -77,6 +77,39 @@ def _token_json_path(tokenstore: Path) -> Path:
     return tokenstore
 
 
+class TransientGarminNetworkError(Exception):
+    """TLS/socket drop or similar from Garmin edge — collector retries once with a fresh client."""
+
+
+def _transient_garmin_network_error(exc: BaseException) -> bool:
+    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    parts: list[str] = []
+    e: BaseException | None = exc
+    for _ in range(8):
+        if e is None:
+            break
+        parts.append(str(e).lower())
+        parts.append(type(e).__name__.lower())
+        e = e.__cause__
+    text = " ".join(parts)
+    return any(
+        n in text
+        for n in (
+            "connection aborted",
+            "connection reset",
+            "forcibly closed",
+            "10054",
+            "broken pipe",
+            "remote end closed",
+            "remote disconnected",
+            "protocolerror",
+            "read timed out",
+            "timed out",
+        )
+    )
+
+
 class GarminCollector:
     """Handles Garmin data collection and job processing."""
     
@@ -293,6 +326,7 @@ class GarminCollector:
 
         retried_auth = False
         retried_login_after_clear = False
+        retried_network = False
 
         while True:
             try:
@@ -377,6 +411,28 @@ class GarminCollector:
                     ),
                     'data_found': False,
                 }
+            except TransientGarminNetworkError as e:
+                if retried_network:
+                    logger.error(
+                        "Garmin connection still failing after retry: %s", e, exc_info=True
+                    )
+                    return {
+                        'success': False,
+                        'failure_kind': 'garmin_network',
+                        'message': (
+                            f"Garmin connection failed (network reset or timeout): {e}. "
+                            "Retry the job later."
+                        ),
+                        'data_found': False,
+                    }
+                retried_network = True
+                logger.warning(
+                    "Transient network error talking to Garmin; invalidating session and retrying once (%s)",
+                    e,
+                )
+                time.sleep(2)
+                self.invalidate_garmin_client()
+                continue
 
     def _collect_garmin_data_body(self, api: Garmin, target_date: str) -> Dict:
         """Fetch all series for target_date using an already-logged-in client."""
@@ -507,6 +563,8 @@ class GarminCollector:
             err_s = str(e).lower()
             if re.search(r"API Error\s+401\b", str(e)) or "not authenticated" in err_s:
                 raise GarminConnectAuthenticationError(str(e)) from e
+            if _transient_garmin_network_error(e):
+                raise TransientGarminNetworkError(str(e)) from e
             import traceback
             error_traceback = traceback.format_exc()
             logger.error(f"Error collecting data for {target_date}: {e}")
@@ -518,6 +576,8 @@ class GarminCollector:
                 'traceback': error_traceback
             }
         except Exception as e:
+            if _transient_garmin_network_error(e):
+                raise TransientGarminNetworkError(str(e)) from e
             import traceback
             error_traceback = traceback.format_exc()
             logger.error(f"Error collecting data for {target_date}: {e}")
@@ -881,6 +941,7 @@ class GarminCollector:
                     'garmin_login',
                     'garmin_rate_limit',
                     'garmin_auth_during_fetch',
+                    'garmin_network',
                 ):
                     msg = result.get('message', 'Garmin collection failed')
                     self.update_job_status(job_id, 'failed', error_message=msg)
