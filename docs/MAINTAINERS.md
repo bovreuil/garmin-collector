@@ -61,7 +61,7 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 | Path | Role |
 |------|------|
 | `collector.py` | Polling, job lifecycle, `get_garmin_api`, Playwright fallback |
-| `garminconnect/client.py` | Mobile login, `load`/`dump`, `connectapi` headers (`Referer` → `/app/home`) |
+| `garminconnect/client.py` | Mobile login, `load`/`dump`, gc-api: cookie + CSRF + browser `User-Agent`, `Sec-CH-UA`/`Sec-Fetch-*`, `Referer` → `/app/home`; `connectapi.<domain>` fallback if `connect` host returns 403 |
 | `garminconnect/__init__.py` | `Garmin.connectapi` (401 detection), `Garmin.login`, 429 re-raise |
 | `scripts/garmin_playwright_login.py` | Headed login, token capture, `--verify` |
 | `requirements.txt` | App + editable vendored package |
@@ -116,6 +116,7 @@ This section lists **real failures** seen in production/dev (March 2026) and how
 |-------------------------|---------|-------------------|
 | **`429`** / **`GarminConnectTooManyRequestsError`** on **`mobile/api/login`** (or wrapped login message) | Programmatic login throttled. | Collector may run **Playwright** (if `GARMIN_BROWSER_LOGIN` or TTY); writes **`garmin_tokens.json`**; retries login. |
 | **`API Error 401`** on **`dailyHeartRate`** (etc.) | Expired or rejected **JWT**/session for **`gc-api`**. | **`Garmin.connectapi`** → **`GarminConnectAuthenticationError`**. Collector **deletes** token file, invalidates client, may open browser **without** a doomed password hop, retries **once**. |
+| **`API Error 403`** on **`dailyHeartRate`** (etc.) | Often the same session class as **401** (edge/WAF or Garmin rejecting the JWT for that route); **not** a reliable “permanent privacy” signal for your own wellness data. | Same as **401**: treated as **`GarminConnectAuthenticationError`** so tokens are cleared and the **one** fetch retry runs (then **`garmin_auth_during_fetch`** if still broken). Previously this fell through to **“completed with no data”** because there was no **`failure_kind`**. |
 | **`Not authenticated`** from **`get_api_headers()`** (before HTTP) | **`jwt_web`** / **`csrf_token`** missing in memory (e.g. bad refresh, partial load). | Must **not** be wrapped as generic **`Connection error`** in **`Garmin.connectapi`**; must propagate **`GarminConnectAuthenticationError`** so the same **clear + reseed** path runs (March 2026 Windows). |
 | **`Connection error:`** / **`Connection aborted`** / **`ConnectionResetError`** / **`10054`** / **`ProtocolError`** | Remote or edge **closed the socket**; often transient. | **`TransientGarminNetworkError`**: **invalidate** client, **sleep ~2s**, retry **once**; if still failing → **`garmin_network`**, job **`failed`**. |
 | Playwright **`OK: wrote … garmin_tokens.json`** | Browser session captured. | Next **`login(path)`** loads file; collection continues. |
@@ -125,6 +126,21 @@ This section lists **real failures** seen in production/dev (March 2026) and how
 1. Confirm rehab-platform job is **`failed`** with a useful **`error_message`** when Garmin said no—not **`completed`** with empty payload for a transport/auth error.
 2. If **browser never opens** on recovery, see **`GARMIN_BROWSER_LOGIN`** / TTY notes in **§4** and `env.example`.
 3. If failures persist after token reseed, check **home IP / VPN**, Garmin account status, and `garmin-login-debug.png` from Playwright.
+
+### 6.4 Debugging persistent **`socialProfile` / gc-api 403** (browser vs Python)
+
+Avoid changing headers or hosts ad hoc until you have **one** failing request compared in both stacks.
+
+1. **Python side:** from the repo root, with `garmin_tokens.json` in place:
+   - `python scripts/debug_garmin_social_profile.py` — prints **URLs**, **header names** (values redacted), and **cookie names** our `Client` would use.
+   - `python scripts/debug_garmin_social_profile.py --probe` — performs the GETs and prints **status**, **Content-Type**, and a **short body** (confirms Cloudflare HTML vs JSON API error).
+2. **Browser side:** normal Chrome (same account, already on Connect if possible), F12 → **Network**, filter **`socialProfile`** or **`userprofile-service`**, trigger a navigation that refetches profile if needed. Open the request → **Headers**:
+   - Note full **Request URL** (host + path).
+   - Compare **Request headers** to the script output: **Referer**, **Origin**, **connect-csrf-token**, **DI-Backend**, **User-Agent**, **Cookie** (names; do not paste secrets).
+   - Right-click the request → **Copy → Copy as cURL** for a precise diff against what Python sends.
+3. **Interpretation:** mismatched **host/path** (e.g. `connect…/gc-api/…` vs `connectapi…/…`), missing **header**, or a **403 HTML** body from Cloudflare points to edge/session rules, not “random library bugs.” If the **browser** call is **403** too, the problem is Garmin/account/session, not the collector.
+4. **`gc-api` social profile URL:** the Connect SPA calls **`/gc-api/userprofile-service/socialProfile/{displayName}`** (e.g. `…/bovreuil`). The bare **`…/socialProfile`** path can return **403**. The collector persists **`profile_display_name`** in **`garmin_tokens.json`**; Playwright seeds it from the same XHR when possible.
+5. **`gc-api` User-Agent / Accept:** sessions are often bound to the **browser User-Agent** that obtained **JWT_WEB**. **`garmin_tokens.json`** may include **`gc_api_user_agent`** (set by Playwright). **`Accept: */*`** matches the SPA’s socialProfile request better than **`Accept: application/json` alone** for some accounts.
 
 ---
 

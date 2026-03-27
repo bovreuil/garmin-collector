@@ -13,6 +13,10 @@ optional .env via python-dotenv.
 After login, tokens are resolved from: ``JWT_WEB`` cookie and intercepted
 ``connect-csrf-token`` requests; then ``localStorage["Token"].access_token`` with CSRF
 from storage/cookies; then ``di-oauth/refresh`` JSON if needed.
+
+Cookie/localStorage pairs are not written until a short settle delay after Connect
+loads so the SPA can finish session setup (di-oauth JSON from the network is still
+used immediately when present).
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _CONNECT_URL_RE = re.compile(r".*connect\.garmin\.com.*", re.I)
 
-# Current Connect web lands on /app/home; /modern/ often redirects there.
+# Navigate here after SSO; gc-api/di-oauth Referer matches client.py (app shell, not /modern/).
 _CONNECT_APP_HOME = "https://connect.garmin.com/app/home"
 _MODERN_ENTRY = _CONNECT_APP_HOME
 
@@ -61,6 +65,12 @@ _DEFAULT_UA = (
 _STEALTH_INIT = """
 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 """
+
+# After redirect to connect.garmin.com, JWT_WEB + CSRF can appear before the SPA
+# finishes di-oauth / gc-api session setup. Cookie-based capture before this delay
+# often yields 403 on socialProfile. di-oauth JSON from on_response is still
+# accepted immediately (authoritative when the body includes both tokens).
+_MIN_COOKIE_CAPTURE_SETTLE_SEC = 5.0
 
 
 def _project_root() -> Path:
@@ -130,7 +140,7 @@ def _tokens_from_refresh_post(
         headers={
             "Accept": "application/json",
             "NK": "NT",
-            "Referer": "https://connect.garmin.com/app/home",
+            "Referer": _CONNECT_APP_HOME,
         },
         timeout=60,
     )
@@ -215,23 +225,23 @@ def _di_oauth_refresh_in_page(page: Any, context: Any) -> dict[str, str] | None:
     """
     try:
         result = page.evaluate(
-            """async () => {
-                const r = await fetch('https://connect.garmin.com/services/auth/token/di-oauth/refresh', {
+            f"""async () => {{
+                const r = await fetch('https://connect.garmin.com/services/auth/token/di-oauth/refresh', {{
                     method: 'POST',
                     credentials: 'include',
-                    headers: {
+                    headers: {{
                         'Accept': 'application/json',
                         'NK': 'NT',
-                        'Referer': 'https://connect.garmin.com/app/home',
+                        'Referer': '{_CONNECT_APP_HOME}',
                         'Origin': 'https://connect.garmin.com',
-                    },
-                });
+                    }},
+                }});
                 const text = await r.text();
                 let json = null;
-                try { json = JSON.parse(text); } catch (e) {}
+                try {{ json = JSON.parse(text); }} catch (e) {{}}
                 const headers = Object.fromEntries(r.headers.entries());
-                return { status: r.status, text, json, headers };
-            }"""
+                return {{ status: r.status, text, json, headers }};
+            }}"""
         )
     except Exception as e:  # noqa: BLE001
         _LOGGER.debug("In-page refresh evaluate failed: %s", e)
@@ -293,7 +303,7 @@ def _di_oauth_refresh_playwright(context: Any) -> dict[str, str] | None:
     headers = {
         "Accept": "application/json",
         "NK": "NT",
-        "Referer": "https://connect.garmin.com/app/home",
+        "Referer": _CONNECT_APP_HOME,
         "Origin": "https://connect.garmin.com",
     }
     try:
@@ -494,10 +504,14 @@ def _apply_tokens_to_client(
     jwt: str,
     csrf: str,
     cookie_dict: dict[str, str],
+    *,
+    gc_api_user_agent: str | None = None,
 ) -> Client:
     client = Client()
     client.jwt_web = jwt
     client.csrf_token = csrf
+    if gc_api_user_agent and gc_api_user_agent.strip():
+        client.gc_api_user_agent = gc_api_user_agent.strip()
     for name, value in cookie_dict.items():
         client.cs.cookies.set(name, value, domain=".garmin.com", path="/")
     client.cs.cookies.set("JWT_WEB", jwt, domain=".garmin.com", path="/")
@@ -509,10 +523,23 @@ def _verify_session(token_dir: Path) -> None:
 
     path_str = str(token_dir)
     api = Garmin()
-    api.login(path_str)
-    prof = api.client.connectapi("/userprofile-service/socialProfile")
-    if not isinstance(prof, dict) or "displayName" not in prof:
-        raise RuntimeError(f"Unexpected profile response: {prof!r}")
+    try:
+        api.login(path_str)
+    except Exception as e:
+        _LOGGER.error(
+            "Session verify failed (login or socialProfile): %s",
+            e,
+            exc_info=True,
+        )
+        raise RuntimeError(
+            "Verify failed: could not load social profile with saved tokens. "
+            "If the browser closed before the dashboard appeared, try again; "
+            "otherwise check logs above for API Error status."
+        ) from e
+    if not api.display_name:
+        raise RuntimeError(
+            "Login succeeded but display_name is missing — check socialProfile URL capture."
+        )
 
 
 def _sso_error_banner_visible(page: Any) -> bool:
@@ -570,6 +597,16 @@ def run_login(
     def on_response(response: Any) -> None:
         try:
             u = response.url
+            # SPA calls ``.../socialProfile/{displayName}``; persist that suffix for Python gc-api.
+            if (
+                response.status in (200, 201)
+                and "connect.garmin.com" in u
+                and "/socialProfile/" in u
+                and "userprofile-service" in u
+            ):
+                m = re.search(r"/socialProfile/([^/?#]+)", u)
+                if m and m.group(1):
+                    captured["profile_display_name"] = m.group(1)
             if response.status >= 400 and (
                 "sso.garmin.com" in u or "sign-in" in u or "/portal/sso" in u
             ):
@@ -716,15 +753,28 @@ def run_login(
                 f"Did not reach connect.garmin.com in time. Screenshot: {dbg}"
             ) from e
 
-        def _capture_from_session() -> bool:
-            """True if hook or cookies/storage already have a full JWT+CSRF pair."""
+        try:
+            page.wait_for_load_state("load", timeout=60_000)
+        except Exception:  # noqa: BLE001
+            pass
+
+        connect_landed_at = time.time()
+
+        def _refresh_from_di_oauth_hook() -> bool:
             ref = captured.get("refresh")
-            if (
+            return bool(
                 isinstance(ref, dict)
                 and ref.get("encryptedToken")
                 and ref.get("csrfToken")
-            ):
+            )
+
+        def _capture_from_session() -> bool:
+            """True if hook or cookies/storage already have a full JWT+CSRF pair."""
+            if _refresh_from_di_oauth_hook():
                 return True
+            elapsed = time.time() - connect_landed_at
+            if elapsed < _MIN_COOKIE_CAPTURE_SETTLE_SEC:
+                return False
             tok = _tokens_from_connect_session(
                 page, context.cookies(), csrf_from_request
             )
@@ -732,14 +782,20 @@ def run_login(
                 captured["refresh"] = tok
                 _LOGGER.info(
                     "Captured session (JWT_WEB or localStorage Token + CSRF from "
-                    "requests/storage/cookies)"
+                    "requests/storage/cookies; %.1fs after Connect load)",
+                    elapsed,
                 )
                 return True
             return False
 
-        # Poll as soon as we hit Connect — JWT_WEB / CSRF often appear within seconds.
-        # (An older version waited ~45s only for di-oauth JSON in on_response, which often
-        # has an empty body; session tokens are detected below instead.)
+        _LOGGER.info(
+            "Connect loaded; polling for tokens (di-oauth JSON accepted immediately; "
+            "cookie/localStorage pair only after %.0fs on this page)",
+            _MIN_COOKIE_CAPTURE_SETTLE_SEC,
+        )
+
+        # Poll after Connect — JWT_WEB / CSRF often appear within seconds, but we
+        # delay cookie-based capture until _MIN_COOKIE_CAPTURE_SETTLE_SEC (see above).
         poll_interval = 0.2
         max_wait = 120.0 if (manual or no_submit) else 90.0
         deadline = time.time() + max_wait
@@ -754,9 +810,10 @@ def run_login(
             _LOGGER.info("Reloading dashboard to trigger XHRs with connect-csrf-token")
             try:
                 page.goto(_CONNECT_APP_HOME, wait_until="load", timeout=120000)
+                connect_landed_at = time.time()
             except Exception as e:  # noqa: BLE001
                 _LOGGER.debug("Reload: %s", e)
-            reload_deadline = time.time() + 30.0
+            reload_deadline = time.time() + 45.0
             while time.time() < reload_deadline:
                 if _capture_from_session():
                     _LOGGER.info("Captured session after dashboard reload")
@@ -778,6 +835,12 @@ def run_login(
                 pw = _di_oauth_refresh_playwright(context)
             if pw:
                 captured["refresh"] = pw
+
+        if "profile_display_name" not in captured:
+            _LOGGER.info(
+                "Waiting for socialProfile/{{displayName}} request (needed for gc-api path)…"
+            )
+            time.sleep(4.0)
 
         cookies_raw = context.cookies()
         browser.close()
@@ -808,8 +871,14 @@ def run_login(
             "or --no-submit."
         )
 
-    client = _apply_tokens_to_client(jwt, csrf, cookie_dict)
+    client = _apply_tokens_to_client(
+        jwt, csrf, cookie_dict, gc_api_user_agent=_DEFAULT_UA
+    )
     client._tokenstore_path = str(token_dir)
+    pd = captured.get("profile_display_name")
+    if isinstance(pd, str) and pd.strip():
+        client.profile_display_name = pd.strip()
+        _LOGGER.info("Recorded profile display name for gc-api: %s", client.profile_display_name)
     client.dump(str(token_dir))
     _LOGGER.info("Wrote %s", out_file)
 

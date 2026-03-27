@@ -561,7 +561,11 @@ class GarminCollector:
         except GarminConnectConnectionError as e:
             # Legacy wraps or missed 401 text — treat like auth for outer retry
             err_s = str(e).lower()
-            if re.search(r"API Error\s+401\b", str(e)) or "not authenticated" in err_s:
+            if (
+                re.search(r"API Error\s+401\b", str(e))
+                or re.search(r"API Error\s+403\b", str(e))
+                or "not authenticated" in err_s
+            ):
                 raise GarminConnectAuthenticationError(str(e)) from e
             if _transient_garmin_network_error(e):
                 raise TransientGarminNetworkError(str(e)) from e

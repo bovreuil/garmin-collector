@@ -328,9 +328,11 @@ class Garmin:
                 status = getattr(getattr(e, "response", None), "status_code", None)
             else:
                 status = getattr(getattr(e, "response", None), "status_code", None)
-            # client._run_request raises ConnectionError with text "API Error 401" and no .response
+            # client._run_request raises ConnectionError with text "API Error 401" (etc.) and no .response
             if status is None and re.search(r"API Error\s+401\b", str(e)):
                 status = 401
+            if status is None and re.search(r"API Error\s+403\b", str(e)):
+                status = 403
 
             logger.exception(
                 "API call failed for path '%s': %s (status=%s)", path, e, status
@@ -338,6 +340,11 @@ class Garmin:
             if status == 401:
                 raise GarminConnectAuthenticationError(
                     f"Authentication failed: {e}"
+                ) from e
+            # Own-account wellness/API sometimes returns 403 (edge/WAF, stale JWT) instead of 401.
+            if status == 403:
+                raise GarminConnectAuthenticationError(
+                    f"Authentication failed (403): {e}"
                 ) from e
             if status == 429:
                 raise GarminConnectTooManyRequestsError(
@@ -412,6 +419,33 @@ class Garmin:
             logger.exception("Download failed for path '%s'", path)
             raise GarminConnectConnectionError(f"Download error: {e}") from e
 
+    def _fetch_social_profile_for_login(self) -> dict[str, Any]:
+        """GET social profile; Garmin gc-api expects ``/socialProfile/{displayName}`` (SPA 2026)."""
+        paths: list[str] = []
+        if self.client.profile_display_name:
+            paths.append(
+                "/userprofile-service/socialProfile/"
+                + self.client.profile_display_name.strip().lstrip("/")
+            )
+        paths.append("/userprofile-service/socialProfile")
+        last_err: BaseException | None = None
+        for attempt in range(3):
+            for path in paths:
+                try:
+                    prof = self.client.connectapi(path)
+                    if isinstance(prof, dict) and prof.get("displayName"):
+                        dn = prof.get("displayName")
+                        if dn:
+                            self.client.profile_display_name = str(dn)
+                        return prof
+                except BaseException as e:
+                    last_err = e
+                    logger.debug("socialProfile attempt %s: %s", path, e)
+            time.sleep(1)
+        raise GarminConnectAuthenticationError(
+            "Failed to retrieve social profile"
+        ) from last_err
+
     def login(self, /, tokenstore: str | None = None) -> tuple[str | None, str | None]:
         """Log in natively.
 
@@ -475,22 +509,7 @@ class Garmin:
                 # Continue to load profile/settings below
 
             # Ensure profile is loaded (tokenstore path may not populate it)
-            prof = None
-            for attempt in range(3):
-                try:
-                    prof = self.client.connectapi("/userprofile-service/socialProfile")
-                    if prof and isinstance(prof, dict) and "displayName" in prof:
-                        break
-                except Exception as e:
-                    if attempt == 2:
-                        raise GarminConnectAuthenticationError(
-                            "Failed to retrieve social profile"
-                        ) from e
-                    logger.debug("Retrying social profile fetch: %s", e)
-                    time.sleep(1)
-            else:
-                raise GarminConnectAuthenticationError("Invalid profile data found")
-
+            prof = self._fetch_social_profile_for_login()
             self.display_name = prof.get("displayName")
             self.full_name = prof.get("fullName")
 
@@ -517,6 +536,12 @@ class Garmin:
                 raise GarminConnectAuthenticationError("Invalid user settings found")
 
             self.unit_system = settings["userData"].get("measurementSystem")
+
+            if self.client._tokenstore_path:
+                try:
+                    self.client.dump(self.client._tokenstore_path)
+                except OSError as oe:
+                    logger.debug("Could not write token file after login: %s", oe)
 
             return mfa_status, _legacy_token
 
@@ -575,20 +600,12 @@ class Garmin:
         """Resume login interactively."""
         mfa_status, _legacy_token = self.client.resume_login(client_state, mfa_code)
 
-        prof = None
-        for attempt in range(3):
-            try:
-                prof = self.client.connectapi("/userprofile-service/socialProfile")
-                if prof and isinstance(prof, dict) and "displayName" in prof:
-                    self.display_name = prof.get("displayName")
-                    self.full_name = prof.get("fullName")
-                    break
-            except Exception as e:
-                if attempt == 2:
-                    logger.debug("Profile fetch failed during resume_login, continuing")
-                else:
-                    logger.debug("Retrying profile fetch during resume_login: %s", e)
-                    time.sleep(1)
+        try:
+            prof = self._fetch_social_profile_for_login()
+            self.display_name = prof.get("displayName")
+            self.full_name = prof.get("fullName")
+        except GarminConnectAuthenticationError:
+            logger.debug("Profile fetch failed during resume_login, continuing")
 
         settings = None
         for attempt in range(3):
