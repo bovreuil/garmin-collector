@@ -14,9 +14,8 @@ After login, tokens are resolved from: ``JWT_WEB`` cookie and intercepted
 ``connect-csrf-token`` requests; then ``localStorage["Token"].access_token`` with CSRF
 from storage/cookies; then ``di-oauth/refresh`` JSON if needed.
 
-Cookie/localStorage pairs are not written until a short settle delay after Connect
-loads so the SPA can finish session setup (di-oauth JSON from the network is still
-used immediately when present).
+A complete di-oauth token pair from the network hook is accepted as soon as it
+arrives; cookie/localStorage pairs are polled without an artificial post-load delay.
 """
 
 from __future__ import annotations
@@ -65,13 +64,6 @@ _DEFAULT_UA = (
 _STEALTH_INIT = """
 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 """
-
-# After redirect to connect.garmin.com, JWT_WEB + CSRF can appear before the SPA
-# finishes di-oauth / gc-api session setup. Cookie-based capture before this delay
-# often yields 403 on socialProfile. di-oauth JSON from on_response is still
-# accepted immediately (authoritative when the body includes both tokens).
-_MIN_COOKIE_CAPTURE_SETTLE_SEC = 5.0
-
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -772,14 +764,12 @@ def run_login(
             """True if hook or cookies/storage already have a full JWT+CSRF pair."""
             if _refresh_from_di_oauth_hook():
                 return True
-            elapsed = time.time() - connect_landed_at
-            if elapsed < _MIN_COOKIE_CAPTURE_SETTLE_SEC:
-                return False
             tok = _tokens_from_connect_session(
                 page, context.cookies(), csrf_from_request
             )
             if tok:
                 captured["refresh"] = tok
+                elapsed = time.time() - connect_landed_at
                 _LOGGER.info(
                     "Captured session (JWT_WEB or localStorage Token + CSRF from "
                     "requests/storage/cookies; %.1fs after Connect load)",
@@ -789,13 +779,11 @@ def run_login(
             return False
 
         _LOGGER.info(
-            "Connect loaded; polling for tokens (di-oauth JSON accepted immediately; "
-            "cookie/localStorage pair only after %.0fs on this page)",
-            _MIN_COOKIE_CAPTURE_SETTLE_SEC,
+            "Connect loaded; polling for tokens (di-oauth JSON when present; "
+            "otherwise cookies/localStorage as soon as available).",
         )
 
-        # Poll after Connect — JWT_WEB / CSRF often appear within seconds, but we
-        # delay cookie-based capture until _MIN_COOKIE_CAPTURE_SETTLE_SEC (see above).
+        # Poll after Connect until JWT+CSRF are available or timeout.
         poll_interval = 0.2
         max_wait = 120.0 if (manual or no_submit) else 90.0
         deadline = time.time() + max_wait
