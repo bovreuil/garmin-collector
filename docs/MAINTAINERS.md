@@ -157,6 +157,8 @@ Avoid changing headers or hosts ad hoc until you have **one** failing request co
 
 March 2026: **429** on Garth/SSO and on **`react`** `mobile/api/login` for this account; waiting and network changes did not restore programmatic login. **Browser** login remained viable. Response: ship Playwright seeding, JWT persistence, collector auto-fallback, faster post-login polling in the script (no fixed 45s wait on empty `di-oauth` JSON). Older dated logs and SHAs were in a handoff doc; **this file** is the living substitute.
 
+**If this stack breaks again:** see [GARMIN_AUTH_LANDSCAPE.md — When the current stack stops working](GARMIN_AUTH_LANDSCAPE.md#when-the-current-stack-stops-working-contingency-checklist) (upstream sync order, issue links, and **browser-only / webhook** alternatives such as [garmin-data-bridge](https://github.com/Flo976/garmin-data-bridge)).
+
 ---
 
 ## 9. Disclaimer

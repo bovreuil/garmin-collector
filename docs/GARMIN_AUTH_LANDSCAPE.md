@@ -109,15 +109,40 @@ Both are valid; pick based on how messy you want your working tree during the sp
 
 ---
 
+## When the current stack stops working (contingency checklist)
+
+Use this section when **token reuse**, **`di-oauth` refresh**, and **Playwright seeding** are no longer enough (for example persistent **429/403** on **`gc-api`** from Python, or Garmin changes that require following the SPA even for reads).
+
+**Order of attack (lowest churn first)**
+
+1. **Confirm failure mode** using [MAINTAINERS.md section 6 (failure modes)](MAINTAINERS.md#6-failure-modes-log-signatures-and-job-status) (429 vs 401 vs network vs misclassified job).
+2. **Refresh vendored `react`:** `git fetch upstream && git diff upstream/react -- garminconnect/ pyproject.toml`, then merge fixes and re-test (see **Staying aligned** above).
+3. **Re-read upstream threads** — behaviour changes quickly — especially [python-garminconnect#337](https://github.com/cyberjunky/python-garminconnect/issues/337), [python-garminconnect#332](https://github.com/cyberjunky/python-garminconnect/issues/332), and [matin/garth#217](https://github.com/matin/garth/issues/217) (Garth is [deprecated](https://github.com/matin/garth/discussions/222) but the discussion still indexes SSO/edge reports).
+
+**Heavier alternative: browser-only sync by intercepting the Connect SPA**
+
+[garmin-data-bridge](https://github.com/Flo976/garmin-data-bridge) (Flo976) is a **different architecture**: a real Chromium session (e.g. **patchright** + **xvfb** on Linux) lets the **Connect web app** load data; the tool **intercepts** those responses and **POSTs JSON to your own webhook** instead of calling **`gc-api`** from Python with saved JWT.
+
+| Consideration | Notes |
+|----------------|--------|
+| **Fit for this repo today** | **Low priority** while **`gc-api` + `garmin_tokens.json`** still work. This project’s integration is built around **`collector.py`** and rehab-platform’s job contract; **garmin-data-bridge** is **webhook-centric** and would need a **new adapter** (or a replacement collector path), not a drop-in. |
+| **Hardware / ops** | **Browser-bound** — on a **slow mini-ITX** the maintainer already pays ~**50s** occasionally for **Playwright seeding only**; a **full sync** through the SPA would likely be **slower and more fragile** than the current **API-heavy** path. |
+| **When to reconsider** | If Garmin makes **programmatic `gc-api` access** impractical but the **Connect UI** still works from a **residential IP**, this class of tool may be **more durable** (the app’s own requests track Garmin’s changes). Treat it as a **spike**, not a committed direction, until you validate latency and stability. |
+| **Caveats from upstream README** | **Linux-focused** (xvfb), **residential IP**, **no MFA** in their docs at time of writing, single-account ergonomics — verify against your account and [INTEGRATION.md](INTEGRATION.md) needs before investing. |
+
+---
+
 ## Related links (bookmark)
 
 | Resource | URL |
 |----------|-----|
 | Garth | https://github.com/matin/garth |
+| Garth deprecation announcement | https://github.com/matin/garth/discussions/222 |
 | Garth SSO / 429 discussion | https://github.com/matin/garth/issues/217 |
 | python-garminconnect | https://github.com/cyberjunky/python-garminconnect |
 | Issue #332 (auth change) | https://github.com/cyberjunky/python-garminconnect/issues/332 |
 | Issue #337 (429 login) | https://github.com/cyberjunky/python-garminconnect/issues/337 |
+| garmin-data-bridge (SPA intercept / webhook) | https://github.com/Flo976/garmin-data-bridge |
 
 ---
 
