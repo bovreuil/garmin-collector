@@ -40,7 +40,9 @@ If Garmin blocks or changes the **programmatic login** endpoints, **no amount of
 
 **[Garth](https://github.com/matin/garth)** (`matin/garth` on GitHub) is a Python library that implements Garmin’s **SSO + token exchange** flow used to obtain and refresh credentials for **Garmin Connect / Connect API**. It stores **oauth-related token files** on disk and provides an HTTP client aimed at `connectapi.garmin.com`.
 
-**python-garminconnect** uses Garth internally: `Garmin.login()` delegates to Garth for sign-in. Therefore, **Garth-only projects** and **classic python-garminconnect** users often see **the same class of failures** when Garmin or Cloudflare tightens the **login surface**.
+**Deprecation (March 2026):** The maintainer has **deprecated** Garth: Garmin changed auth so the **mobile-auth path Garth relied on** no longer works as before (see [#217](https://github.com/matin/garth/issues/217) and [python-garminconnect#332](https://github.com/cyberjunky/python-garminconnect/issues/332)). A final PyPI release with a deprecation warning will point to the announcement [Deprecating Garth — discussion #222](https://github.com/matin/garth/discussions/222). The repository stays up for forks and history; treat Garth-first integrations as **legacy** unless someone actively maintains a fork.
+
+**Classic python-garminconnect** (PyPI / main branch) used Garth internally for `Garmin.login()`, so **Garth-only** stacks and those installs often hit **the same class of failures** when the **login surface** tightens. The **`react`** branch and this repo’s vendored client **do not** use Garth (JWT / `gc-api` instead).
 
 ---
 
