@@ -75,8 +75,12 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 |----------|---------|
 | `GARMIN_EMAIL` / `GARMIN_PASSWORD` | Required for programmatic path and for Playwright auto-fill |
 | `GARMINTOKENS` | Directory for `garmin_tokens.json` (default `.garmin-tokens` under repo root) |
+| `GARMIN_KEEPALIVE_INTERVAL` | Seconds between in-process keepalive runs (`0` disables). Keepalive uses a lightweight Garmin API call to keep sessions warm and reduce browser reseed during manual collections. |
 | `GARMIN_BROWSER_LOGIN` | `1` = always allow collector-triggered Playwright; `0` = never; **unset** = allow when stdin is a **TTY** (heuristic; set `1` only if recovery never opens a browser on your host) |
 | `GARMIN_PLAYWRIGHT_CHROME` | When set truthy, collector passes `--chrome` to the helper (system Google Chrome) |
+| `COLLECTOR_HEALTH_INTERVAL` | Seconds between collector health heartbeats to rehab-platform (`0` disables). |
+| `COLLECTOR_HEALTH_ENDPOINT` | Relative path for heartbeat POST JSON payloads (default `/api/collector/health`; `404` is tolerated). |
+| `COLLECTOR_ID` | Optional stable identifier included in heartbeat payloads (defaults to hostname). |
 
 `GARMINTOKENS` is temporarily **removed** from the environment around `api.login` inside the collector so the library resolves the path argument explicitly (avoids double-application of env defaults).
 
@@ -150,6 +154,7 @@ Avoid changing headers or hosts ad hoc until you have **one** failing request co
 2. Delete or keep `garmin_tokens.json` depending on what you are testing (fresh login vs reuse).
 3. `python collector.py --poll` with a pending job; confirm logs show token reuse on later jobs, and platform job `completed` or a clear `failed` + `error_message`.
 4. Optional: `python scripts/garmin_playwright_login.py --verify` after dependency changes.
+5. If heartbeat is enabled, confirm rehab-platform receives collector health payloads (session state, keepalive counters, fast/slow collection stats) at `COLLECTOR_HEALTH_ENDPOINT`.
 
 ---
 

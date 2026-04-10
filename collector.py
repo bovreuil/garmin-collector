@@ -13,8 +13,10 @@ import re
 import requests
 import subprocess
 import sys
+import socket
+import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -137,7 +139,40 @@ class GarminCollector:
 
         self._tokenstore_path = resolve_tokenstore_path()
         self._garmin: Optional[Garmin] = None
+        self._garmin_lock = threading.Lock()
+
+        self.keepalive_interval = int(os.getenv("GARMIN_KEEPALIVE_INTERVAL", "0"))
+        self.health_interval = int(os.getenv("COLLECTOR_HEALTH_INTERVAL", "60"))
+        self.collector_id = os.getenv("COLLECTOR_ID", socket.gethostname())
+        self.health_endpoint = os.getenv("COLLECTOR_HEALTH_ENDPOINT", "/api/collector/health")
+
+        self._current_task = "idle"
+        self._last_garmin_ok_utc: Optional[str] = None
+        self._last_auth_refresh_utc: Optional[str] = None
+        self._last_browser_reseed_utc: Optional[str] = None
+        self._last_error: Dict[str, Optional[str]] = {
+            "kind": "none",
+            "message": None,
+            "at_utc": None,
+        }
+
+        self._next_keepalive_monotonic = time.monotonic() + max(self.keepalive_interval, 1)
+        self._next_health_monotonic = time.monotonic() + max(self.health_interval, 1)
+
+        self._keepalive_last_run_utc: Optional[str] = None
+        self._keepalive_last_duration_ms: Optional[int] = None
+        self._keepalive_last_result: Optional[str] = None
+        self._keepalive_events: List[Dict[str, str]] = []
+
+        self._collection_last_run_utc: Optional[str] = None
+        self._collection_last_duration_ms: Optional[int] = None
+        self._collection_last_result: Optional[str] = None
+        self._collection_events: List[Dict[str, str]] = []
         logger.info("Garmin token storage directory: %s", self._tokenstore_path)
+        if self.keepalive_interval > 0:
+            logger.info("Garmin keepalive enabled every %ss", self.keepalive_interval)
+        else:
+            logger.info("Garmin keepalive disabled (GARMIN_KEEPALIVE_INTERVAL=0)")
 
     def _clear_stored_garmin_tokens(self) -> None:
         """Remove garmin_tokens.json so login does not reload an expired session."""
@@ -190,6 +225,194 @@ class GarminCollector:
                 f"{result.returncode}. Install browser deps and run manually: "
                 "python scripts/garmin_playwright_login.py --verify"
             )
+        self._last_browser_reseed_utc = self._now_utc()
+
+    def _now_utc(self) -> str:
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    def _trim_events_24h(self, events: List[Dict[str, str]]) -> None:
+        cutoff = time.time() - 86400
+        events[:] = [e for e in events if e.get("ts_epoch", 0) >= cutoff]
+
+    def _record_keepalive_event(self, result: str) -> None:
+        self._keepalive_events.append({"result": result, "ts_epoch": time.time()})
+        self._trim_events_24h(self._keepalive_events)
+
+    def _record_collection_event(self, duration_ms: int, result: str) -> None:
+        self._collection_events.append(
+            {
+                "result": result,
+                "duration_ms": duration_ms,
+                "ts_epoch": time.time(),
+            }
+        )
+        self._trim_events_24h(self._collection_events)
+
+    def _set_last_error(self, kind: str, message: str) -> None:
+        self._last_error = {
+            "kind": kind,
+            "message": message[:300],
+            "at_utc": self._now_utc(),
+        }
+
+    def _set_ok(self) -> None:
+        self._last_garmin_ok_utc = self._now_utc()
+        self._last_error = {"kind": "none", "message": None, "at_utc": None}
+
+    def _garmin_session_state(self) -> str:
+        if self._current_task == "keepalive":
+            return "refreshing"
+        if self._current_task == "reseed":
+            return "reseeding"
+        if self._last_error.get("kind") not in (None, "none"):
+            return "error"
+        if self._last_garmin_ok_utc:
+            return "warm"
+        return "cold"
+
+    def _build_health_payload(self) -> Dict:
+        self._trim_events_24h(self._keepalive_events)
+        self._trim_events_24h(self._collection_events)
+
+        keepalive_counts = {"runs": 0, "ok": 0, "refreshed": 0, "reseeded": 0, "failed": 0}
+        for ev in self._keepalive_events:
+            keepalive_counts["runs"] += 1
+            key = ev.get("result", "failed")
+            if key in keepalive_counts:
+                keepalive_counts[key] += 1
+
+        collection_counts = {"runs": 0, "fast_lt_10s": 0, "slow_ge_10s": 0, "failed": 0}
+        for ev in self._collection_events:
+            collection_counts["runs"] += 1
+            if ev.get("result") == "failed":
+                collection_counts["failed"] += 1
+            if int(ev.get("duration_ms", 0)) < 10000:
+                collection_counts["fast_lt_10s"] += 1
+            else:
+                collection_counts["slow_ge_10s"] += 1
+
+        next_keepalive_utc = None
+        if self.keepalive_interval > 0:
+            eta = max(0, self._next_keepalive_monotonic - time.monotonic())
+            next_keepalive_utc = datetime.fromtimestamp(
+                time.time() + eta, tz=timezone.utc
+            ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+        return {
+            "collector_id": self.collector_id,
+            "timestamp_utc": self._now_utc(),
+            "version": os.getenv("COLLECTOR_VERSION", "unknown"),
+            "garmin": {
+                "session_state": self._garmin_session_state(),
+                "last_ok_utc": self._last_garmin_ok_utc,
+                "last_auth_refresh_utc": self._last_auth_refresh_utc,
+                "last_browser_reseed_utc": self._last_browser_reseed_utc,
+                "last_error": self._last_error,
+            },
+            "keepalive": {
+                "enabled": self.keepalive_interval > 0,
+                "interval_sec": self.keepalive_interval,
+                "next_due_utc": next_keepalive_utc,
+                "running": self._current_task == "keepalive",
+                "last_run_utc": self._keepalive_last_run_utc,
+                "last_duration_ms": self._keepalive_last_duration_ms,
+                "last_result": self._keepalive_last_result,
+                "counters_24h": keepalive_counts,
+            },
+            "collections": {
+                "last_run_utc": self._collection_last_run_utc,
+                "last_duration_ms": self._collection_last_duration_ms,
+                "last_result": self._collection_last_result,
+                "counters_24h": collection_counts,
+            },
+            "concurrency": {
+                "garmin_lock_held": self._garmin_lock.locked(),
+                "current_task": self._current_task,
+            },
+        }
+
+    def send_health_heartbeat(self, *, force: bool = False) -> None:
+        if self.health_interval <= 0:
+            return
+        now_mono = time.monotonic()
+        if not force and now_mono < self._next_health_monotonic:
+            return
+        self._next_health_monotonic = now_mono + self.health_interval
+
+        endpoint = self.health_endpoint if self.health_endpoint.startswith("/") else f"/{self.health_endpoint}"
+        payload = self._build_health_payload()
+        try:
+            resp = self.session.post(f"{self.server_url}{endpoint}", json=payload, timeout=10)
+            if resp.status_code not in (200, 201, 202, 204, 404):
+                logger.warning("Collector health heartbeat returned HTTP %s", resp.status_code)
+        except requests.RequestException as e:
+            logger.debug("Collector health heartbeat failed: %s", e)
+
+    def run_keepalive_once(self) -> None:
+        if self.keepalive_interval <= 0:
+            return
+        started = time.monotonic()
+        result = "failed"
+        token_path = _token_json_path(self._tokenstore_path)
+        before_mtime = token_path.stat().st_mtime if token_path.exists() else None
+        browser_before = self._last_browser_reseed_utc
+        retried_auth = False
+        retried_network = False
+
+        with self._garmin_lock:
+            self._current_task = "keepalive"
+            try:
+                while True:
+                    try:
+                        api = self.get_garmin_api()
+                        api.connectapi(api.garmin_connect_user_settings_url)
+                        break
+                    except GarminConnectAuthenticationError as e:
+                        if retried_auth:
+                            raise
+                        retried_auth = True
+                        logger.warning("Keepalive auth failed; clearing tokens and retrying once: %s", e)
+                        self._clear_stored_garmin_tokens()
+                        self.invalidate_garmin_client()
+                        self._current_task = "reseed"
+                        self._reseed_via_browser_after_token_clear("keepalive auth failure")
+                        self._current_task = "keepalive"
+                        continue
+                    except TransientGarminNetworkError:
+                        if retried_network:
+                            raise
+                        retried_network = True
+                        self.invalidate_garmin_client()
+                        time.sleep(2)
+                        continue
+
+                self._set_ok()
+                after_mtime = token_path.stat().st_mtime if token_path.exists() else None
+                browser_after = self._last_browser_reseed_utc
+                if browser_after and browser_after != browser_before:
+                    result = "reseeded"
+                elif before_mtime is not None and after_mtime is not None and after_mtime > before_mtime:
+                    result = "refreshed"
+                    self._last_auth_refresh_utc = self._now_utc()
+                else:
+                    result = "ok"
+            except GarminConnectTooManyRequestsError as e:
+                self._set_last_error("garmin_rate_limit", str(e))
+            except GarminConnectAuthenticationError as e:
+                self._set_last_error("garmin_auth", str(e))
+            except Exception as e:
+                self._set_last_error("garmin_network" if _transient_garmin_network_error(e) else "garmin_unknown", str(e))
+                logger.warning("Keepalive failed: %s", e)
+            finally:
+                self._current_task = "idle"
+
+        # Schedule next keepalive before emitting heartbeat so next_due is accurate.
+        self._next_keepalive_monotonic = time.monotonic() + self.keepalive_interval
+        self._keepalive_last_run_utc = self._now_utc()
+        self._keepalive_last_duration_ms = int((time.monotonic() - started) * 1000)
+        self._keepalive_last_result = result
+        self._record_keepalive_event(result)
+        self.send_health_heartbeat(force=True)
 
     def invalidate_garmin_client(self) -> None:
         """Drop cached Garmin client so the next job performs token-first login again."""
@@ -925,38 +1148,56 @@ class GarminCollector:
         # Update job status to running
         self.update_job_status(job_id, 'running')
         
-        try:
-            # Collect data
-            result = self.collect_garmin_data(target_date, job_id)
-            
-            if result['success']:
-                # Upload data to server
-                upload_success = self.upload_data_to_server(job_id, result)
-                
-                if upload_success:
-                    self.update_job_status(job_id, 'completed', result)
-                    logger.info(f"Job {job_id} completed successfully")
+        started = time.monotonic()
+        result_state = "failed"
+        with self._garmin_lock:
+            self._current_task = "collect"
+            try:
+                # Collect data
+                result = self.collect_garmin_data(target_date, job_id)
+
+                if result['success']:
+                    # Upload data to server
+                    upload_success = self.upload_data_to_server(job_id, result)
+
+                    if upload_success:
+                        self.update_job_status(job_id, 'completed', result)
+                        logger.info(f"Job {job_id} completed successfully")
+                        result_state = "success"
+                    else:
+                        self.update_job_status(job_id, 'failed', error_message="Failed to upload data")
+                        logger.error(f"Job {job_id} failed to upload data")
                 else:
-                    self.update_job_status(job_id, 'failed', error_message="Failed to upload data")
-                    logger.error(f"Job {job_id} failed to upload data")
-            else:
-                fk = result.get('failure_kind')
-                if fk in (
-                    'garmin_login',
-                    'garmin_rate_limit',
-                    'garmin_auth_during_fetch',
-                    'garmin_network',
-                ):
-                    msg = result.get('message', 'Garmin collection failed')
-                    self.update_job_status(job_id, 'failed', error_message=msg)
-                    logger.error(f"Job {job_id} failed: {msg}")
-                else:
-                    self.update_job_status(job_id, 'completed', result)
-                    logger.info(f"Job {job_id} completed with no data found")
+                    fk = result.get('failure_kind')
+                    if fk in (
+                        'garmin_login',
+                        'garmin_rate_limit',
+                        'garmin_auth_during_fetch',
+                        'garmin_network',
+                    ):
+                        msg = result.get('message', 'Garmin collection failed')
+                        self.update_job_status(job_id, 'failed', error_message=msg)
+                        logger.error(f"Job {job_id} failed: {msg}")
+                    else:
+                        self.update_job_status(job_id, 'completed', result)
+                        logger.info(f"Job {job_id} completed with no data found")
+                        result_state = "success"
                 
-        except Exception as e:
-            logger.error(f"Job {job_id} failed with error: {e}")
-            self.update_job_status(job_id, 'failed', error_message=str(e))
+            except Exception as e:
+                logger.error(f"Job {job_id} failed with error: {e}")
+                self.update_job_status(job_id, 'failed', error_message=str(e))
+            finally:
+                self._current_task = "idle"
+                duration_ms = int((time.monotonic() - started) * 1000)
+                self._collection_last_run_utc = self._now_utc()
+                self._collection_last_duration_ms = duration_ms
+                self._collection_last_result = result_state
+                self._record_collection_event(duration_ms, result_state)
+                if result_state == "success" and self.keepalive_interval > 0:
+                    # A successful collection confirms the Garmin session is warm;
+                    # postpone keepalive to avoid an immediate redundant warm-up call.
+                    self._next_keepalive_monotonic = time.monotonic() + self.keepalive_interval
+                self.send_health_heartbeat(force=True)
     
     def run_polling_loop(self, poll_interval: int = 60):
         """
@@ -971,6 +1212,10 @@ class GarminCollector:
         
         while True:
             try:
+                now_mono = time.monotonic()
+                if self.keepalive_interval > 0 and now_mono >= self._next_keepalive_monotonic:
+                    self.run_keepalive_once()
+
                 # Poll for jobs
                 jobs = self.poll_for_jobs()
                 
@@ -982,7 +1227,9 @@ class GarminCollector:
                         self.run_job(job)
                 else:
                     logger.debug("No pending jobs found")
-                
+
+                self.send_health_heartbeat()
+
                 # Wait before next poll
                 time.sleep(poll_interval)
                 

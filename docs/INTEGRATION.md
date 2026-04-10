@@ -220,3 +220,14 @@ Garmin API access in the collector aligns with **[python-garminconnect](https://
 | `POST` | `/api/jobs/<job_id>/data` | Upload Garmin JSON for `target_date` of that job. |
 
 **Auth:** `Authorization: Bearer <SHARED_SECRET>` on all three.
+
+### Optional heartbeat endpoint (recommended for remote operations)
+
+Collector can also send a periodic health payload (`COLLECTOR_HEALTH_INTERVAL`) to:
+
+- `POST /api/collector/health` (or another path via `COLLECTOR_HEALTH_ENDPOINT`)
+
+Expected behavior for compatibility:
+
+- Accept JSON payload and return `200/201/202/204`.
+- If endpoint is absent (`404`), collector continues without failing job polling.
