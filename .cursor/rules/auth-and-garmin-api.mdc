@@ -1,0 +1,25 @@
+---
+description: Auth, vendored garminconnect, and Playwright login—read MAINTAINERS before editing.
+globs: collector.py,garminconnect/**,scripts/garmin_playwright_login.py
+alwaysApply: false
+---
+
+# Auth and Garmin API changes
+
+Before editing matched files, read **[`docs/MAINTAINERS.md`](../../docs/MAINTAINERS.md)** (especially §2–§6).
+
+## Preserve
+
+- **429** → `GarminConnectTooManyRequestsError` propagation and browser fallback semantics
+- **401** → `GarminConnectAuthenticationError` and token clear/retry paths
+- **`failure_kind`** values and job status transitions documented in MAINTAINERS §6
+- Avoid misleading **“completed with no data”** when auth or network failed
+
+## After changes
+
+1. Run **`pdm run test`** from repo root.
+2. Tell the user if a **live collection** or **Playwright reseed** is needed to validate—the agent should not assume prod access.
+
+## Upstream sync
+
+When merging vendored `garminconnect/` updates from upstream `react`, follow MAINTAINERS **§5 Staying aligned**—re-run tests; do not bulk-merge without review.

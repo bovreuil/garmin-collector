@@ -1,0 +1,42 @@
+---
+description: Canonical pytest command for Cursor agents—PDM, VCR, no live Garmin without approval.
+alwaysApply: true
+---
+
+# Python verify (garmin-collector, Cursor agents)
+
+**Read this file before running tests in agent shells.**
+
+## Canonical verify
+
+From **repo root**:
+
+```bash
+pdm run test
+```
+
+Equivalent:
+
+```bash
+pdm run coverage run -m pytest -v --durations=10
+```
+
+If PDM is not set up:
+
+```bash
+pdm install --group :all
+```
+
+## Agent constraints
+
+- Prefer **existing VCR cassettes** (`tests/test_garmin.py`, `tests/test_client_token_file.py`). Do **not** re-record cassettes or call live Garmin APIs without **explicit user approval**.
+- Do **not** run **`python collector.py --poll`** against production rehab-platform or live Garmin without user approval.
+- Do **not** run **`scripts/garmin_playwright_login.py`** unless the user asks—browser login is user-operated on the trusted machine.
+
+## After auth or client changes
+
+Run **`pdm run test`** and report pass/fail. For changes to error classification or job lifecycle, also point the user at relevant **MAINTAINERS.md §6** failure-mode checks if manual collection is needed.
+
+## Sandbox
+
+Most **`pdm run test`** invocations work inside the Cursor sandbox. If restore or testhost issues appear, retry with appropriate permissions or ask the user to run the same command locally and paste output.

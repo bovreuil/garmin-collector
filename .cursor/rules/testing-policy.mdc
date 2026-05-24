@@ -1,0 +1,30 @@
+---
+description: When automated tests are expected in garmin-collector—transformations and protocol logic, not live polling wiring.
+alwaysApply: true
+---
+
+# Testing policy (garmin-collector)
+
+## When tests are expected
+
+- Code that **transforms, classifies, or shapes** data or errors: auth error types (429, 401), `failure_kind`, token load/dump, retry/backoff semantics, payload normalization before upload
+- Changes to **`garminconnect/`** client behaviour that affect login, headers, or API error handling
+- Bug fixes in those areas should include or extend a test where practical
+
+## When tests are NOT required
+
+- README or env.example documentation only
+- Log message wording with no behaviour change
+- Operational notes in MAINTAINERS with no code change
+
+## How to test
+
+- Run **`pdm run test`** from repo root (see **`python-agent-verify.mdc`**)
+- Prefer **VCR cassettes** in `tests/test_garmin.py` for API-shaped behaviour—do not re-record against live Garmin without user approval
+- Use **tdd-working-cycle** / **bdd-example-workshop** skills only when the user explicitly asks—not by default
+
+## On failure
+
+- Report expected vs actual before changing code
+- For regressions, review local diff before altering established code
+- Do not change a test to pass without explicit user approval

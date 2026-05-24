@@ -7,8 +7,9 @@ This is a standalone service that polls the rehab-platform server for Garmin dat
 | Document | Contents |
 |----------|----------|
 | This README | Setup, runtime behavior, deployment, troubleshooting |
-| [docs/MAINTAINERS.md](docs/MAINTAINERS.md) | **Maintainers / coding agents:** auth design (JWT, Playwright, 429), key files, env, upstream sync |
-| [AGENTS.md](AGENTS.md) | Short pointer to MAINTAINERS + other docs |
+| [AGENTS.md](AGENTS.md) | **Coding agents:** entry index (links to rules, docs, verify commands) |
+| [.cursor/WORKING-AGREEMENT.md](.cursor/WORKING-AGREEMENT.md) | Commit/review workflow, testing policy summary, agent operations |
+| [docs/MAINTAINERS.md](docs/MAINTAINERS.md) | Auth design (JWT, Playwright, 429), key files, env, upstream sync, failure modes |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | Architecture vs rehab-platform, full HTTP + JSON contract, auth, operational notes |
 | [docs/GARMIN_AUTH_LANDSCAPE.md](docs/GARMIN_AUTH_LANDSCAPE.md) | Garth, upstream issues (#332/#337, garth#217), `react` branch, how to test |
 

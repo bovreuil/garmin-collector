@@ -2,6 +2,8 @@
 
 **Audience:** Engineers and coding agents changing `collector.py`, the vendored `garminconnect/` package, or `scripts/garmin_playwright_login.py`.
 
+**Agent workflow (commit, review, testing):** [`.cursor/WORKING-AGREEMENT.md`](../.cursor/WORKING-AGREEMENT.md). **Entry index:** [AGENTS.md](../AGENTS.md).
+
 **Operational setup:** [README.md](../README.md). **HTTP contract with rehab-platform:** [INTEGRATION.md](INTEGRATION.md). **Garth / community / upstream context:** [GARMIN_AUTH_LANDSCAPE.md](GARMIN_AUTH_LANDSCAPE.md).
 
 ---

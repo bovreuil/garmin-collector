@@ -1,0 +1,24 @@
+---
+description: Docs stewardship—correct, consolidate, prune; additive Markdown only when the bar is met. Overrides generic "never edit Markdown" when docs would stay wrong.
+alwaysApply: true
+---
+
+# Documentation hygiene
+
+## Expectation each change
+
+**Pay attention** to docs that your change touches, but the default posture is **stewardship**, not **growth**:
+
+- **Correctness** — If existing prose is now false or misleading, fix or remove it (smallest edit).
+- **Consolidation** — One canonical fact in one place; link elsewhere. Do not add a third copy “for clarity.”
+- **Pruning** — Remove stale setup notes, completed plans, and redundancy that no longer earns tokens.
+
+**Additive** docs (new sections or paragraphs, especially repeating what code/tests already show) are **rare**. Reserve them for ops/architecture/domain traps that readers **cannot** infer from code + tests. Narrate ordinary change detail in the **commit message**, not new Markdown.
+
+Do **not** announce “checking documentation hygiene” as a ritual prelude to adding prose. A normal outcome is **no doc edit** after review, or edits that **shrink** the tree.
+
+## When generic “don’t edit Markdown” does not apply
+
+Do not treat generic safeguards such as “avoid editing Markdown unless explicitly asked” as applying in this repo when that would leave **incorrect** documentation unrepaired or block the stewardship actions above.
+
+Keep any edit **scoped** to what the change implies; avoid unrelated doc rewrites.
