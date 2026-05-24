@@ -29,6 +29,7 @@ import os
 import re
 import sys
 import time
+import platform
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +95,43 @@ def resolve_token_dir(explicit: str | None = None) -> Path:
 
 def _truthy_env(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _falsy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("0", "false", "off", "no")
+
+
+def resolve_use_chrome(*, cli_chrome_flag: bool = False) -> bool:
+    """
+    Use system Google Chrome (``channel=chrome``) instead of Playwright Chromium.
+
+    On Windows the default is Chrome so a profile seeded with ``--chrome`` matches
+    collector subprocess recovery (same binary + user-data-dir).
+    """
+    if cli_chrome_flag:
+        return True
+    if _falsy_env("GARMIN_PLAYWRIGHT_CHROME"):
+        return False
+    if _truthy_env("GARMIN_PLAYWRIGHT_CHROME"):
+        return True
+    return platform.system() == "Windows"
+
+
+def _clear_profile_singleton_locks(profile_dir: Path) -> None:
+    """Remove stale Chromium/Chrome singleton files after a crashed browser."""
+    candidates = [
+        profile_dir / name
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket")
+    ]
+    default = profile_dir / "Default"
+    if default.is_dir():
+        candidates.extend(default / name for name in ("SingletonLock", "SingletonCookie"))
+    for path in candidates:
+        try:
+            if path.exists() or path.is_symlink():
+                path.unlink()
+        except OSError as e:
+            _LOGGER.debug("Could not remove profile lock %s: %s", path, e)
 
 
 def resolve_browser_profile_dir(
@@ -723,6 +761,7 @@ def _launch_browser_context(
     def _launch_persistent() -> Any:
         assert profile_dir is not None
         profile_dir.mkdir(parents=True, exist_ok=True)
+        _clear_profile_singleton_locks(profile_dir)
         return p.chromium.launch_persistent_context(
             str(profile_dir),
             **launch_kwargs,
@@ -735,7 +774,12 @@ def _launch_browser_context(
         return browser, context
 
     if profile_dir is not None:
-        _LOGGER.info("Using persistent browser profile: %s", profile_dir)
+        browser_label = "Google Chrome" if use_chrome else "Playwright Chromium"
+        _LOGGER.info(
+            "Using persistent browser profile (%s): %s",
+            browser_label,
+            profile_dir,
+        )
         try:
             context = _launch_persistent()
         except Exception as e:
@@ -745,11 +789,30 @@ def _launch_browser_context(
                     e,
                 )
                 launch_kwargs.pop("channel", None)
+                ignore_args_chrome = list(launch_kwargs.get("ignore_default_args") or [])
+                if "--no-sandbox" in ignore_args_chrome:
+                    ignore_args_chrome.remove("--no-sandbox")
+                launch_kwargs["ignore_default_args"] = ignore_args_chrome
                 context = _launch_persistent()
             else:
-                raise
+                _LOGGER.warning(
+                    "Persistent Chromium launch failed (%s); retrying with channel=chrome.",
+                    e,
+                )
+                launch_kwargs["channel"] = "chrome"
+                if "--no-sandbox" not in launch_kwargs.get("ignore_default_args", []):
+                    launch_kwargs.setdefault("ignore_default_args", ["--enable-automation"])
+                    launch_kwargs["ignore_default_args"] = list(
+                        launch_kwargs["ignore_default_args"]
+                    ) + ["--no-sandbox"]
+                context = _launch_persistent()
         context.add_init_script(_STEALTH_INIT)
-        page = context.pages[0] if context.pages else context.new_page()
+        if not context.pages:
+            time.sleep(0.5)
+        if context.pages:
+            page = context.pages[0]
+        else:
+            page = context.new_page()
         return None, context, page
 
     _LOGGER.info("Ephemeral browser context (no persistent profile)")
@@ -1136,6 +1199,10 @@ def main() -> None:
         ephemeral=args.ephemeral,
     )
 
+    use_chrome = resolve_use_chrome(cli_chrome_flag=args.chrome)
+    if use_chrome and not args.chrome and not _truthy_env("GARMIN_PLAYWRIGHT_CHROME"):
+        _LOGGER.info("Using Google Chrome (default on Windows for persistent profile)")
+
     try:
         out = run_login(
             email,
@@ -1143,7 +1210,7 @@ def main() -> None:
             token_dir,
             headless=args.headless,
             verify=args.verify,
-            use_chrome=args.chrome,
+            use_chrome=use_chrome,
             entry=args.entry,
             manual=args.manual,
             no_submit=args.no_submit,

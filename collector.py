@@ -72,6 +72,16 @@ def _browser_login_enabled() -> bool:
 _PLAYWRIGHT_SCRIPT = _PROJECT_ROOT / "scripts" / "garmin_playwright_login.py"
 
 
+def _playwright_use_chrome() -> bool:
+    """Match scripts/garmin_playwright_login.resolve_use_chrome (Windows defaults to Chrome)."""
+    v = os.getenv("GARMIN_PLAYWRIGHT_CHROME", "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    return sys.platform == "win32"
+
+
 def _token_json_path(tokenstore: Path) -> Path:
     """Same file resolution as garminconnect.client.Client.load/dump."""
     if tokenstore.is_dir() or not tokenstore.name.endswith(".json"):
@@ -206,20 +216,23 @@ class GarminCollector:
                 "python -m playwright install chromium"
             )
         cmd = [sys.executable, str(_PLAYWRIGHT_SCRIPT), "--verify"]
-        if os.getenv("GARMIN_PLAYWRIGHT_CHROME", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
+        if _playwright_use_chrome():
             cmd.append("--chrome")
         logger.info("Running browser login: %s", " ".join(cmd))
         result = subprocess.run(
             cmd,
             cwd=str(_PROJECT_ROOT),
             env=os.environ.copy(),
+            capture_output=True,
+            text=True,
         )
+        if result.stdout:
+            for line in result.stdout.splitlines():
+                if line.strip():
+                    logger.info("playwright: %s", line)
         if result.returncode != 0:
+            if result.stderr:
+                logger.error("Browser login stderr:\n%s", result.stderr[-4000:])
             raise GarminConnectConnectionError(
                 "Browser login helper exited with code "
                 f"{result.returncode}. Install browser deps and run manually: "

@@ -79,7 +79,7 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 | `GARMINTOKENS` | Directory for `garmin_tokens.json` (default `.garmin-tokens` under repo root) |
 | `GARMIN_KEEPALIVE_INTERVAL` | Seconds between in-process keepalive runs (`0` disables). Keepalive uses a lightweight Garmin API call to keep sessions warm and reduce browser reseed during manual collections. |
 | `GARMIN_BROWSER_LOGIN` | `1` = always allow collector-triggered Playwright; `0` = never; **unset** = allow when stdin is a **TTY** (heuristic; set `1` only if recovery never opens a browser on your host) |
-| `GARMIN_PLAYWRIGHT_CHROME` | When set truthy, collector passes `--chrome` to the helper (system Google Chrome) |
+| `GARMIN_PLAYWRIGHT_CHROME` | Use system Google Chrome for Playwright; **on Windows defaults to on** when unset. Set `0` to force Chromium. Use the **same** browser for manual `--chrome` seeding and collector recovery (shared `.garmin-browser-profile/`) |
 | `GARMIN_PLAYWRIGHT_PROFILE` | Persistent browser user-data dir (default `.garmin-browser-profile/`); `0`/`ephemeral` disables |
 | `GARMIN_PLAYWRIGHT_EPHEMERAL` | `1` = fresh context each run (no persistent profile) |
 | `COLLECTOR_HEALTH_INTERVAL` | Seconds between collector health heartbeats to rehab-platform (`0` disables). |
