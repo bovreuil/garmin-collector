@@ -4,6 +4,7 @@ pdm.lock
 
 # Garmin Connect / Garth OAuth tokens (never commit)
 .garmin-tokens/
+.garmin-browser-profile/
 
 # Virtual environments
 .venv/

@@ -30,9 +30,9 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 
 ### 2.3 Playwright browser seeding
 
-**What:** `scripts/garmin_playwright_login.py` signs in with a **real browser**, captures **`JWT_WEB`** (or `localStorage` token) and **`connect-csrf-token`** from SPA traffic, and writes **`garmin_tokens.json`** in the shape **`garminconnect.client.Client.load`** expects.
+**What:** `scripts/garmin_playwright_login.py` signs in with a **real browser**, captures **`JWT_WEB`** (or `localStorage` token) and **`connect-csrf-token`** from SPA traffic, and writes **`garmin_tokens.json`** in the shape **`garminconnect.client.Client.load`** expects. By default it uses a **persistent** Chromium user-data directory (``.garmin-browser-profile/``, override **`GARMIN_PLAYWRIGHT_PROFILE`**) via `launch_persistent_context`, not a throwaway context each run.
 
-**Why:** For several accounts (including this project’s operator), **password login from Python** returns **HTTP 429** even at low frequency and after long waits, while **browser** login still works. Tokens obtained in the browser are then reused for **API** calls via `requests` with the same headers/cookies model as the web app.
+**Why:** For several accounts (including this project’s operator), **password login from Python** returns **HTTP 429** even at low frequency and after long waits, while **browser** login still works. Tokens obtained in the browser are then reused for **API** calls via `requests` with the same headers/cookies model as the web app. A persistent profile keeps Garmin/Cloudflare cookies and “remember this device” state on the collector host, which often reduces captchas and SSO friction on later reseeds. Set **`GARMIN_PLAYWRIGHT_EPHEMERAL=1`** or **`--ephemeral`** to restore the old one-shot context behaviour.
 
 ### 2.4 Optional auto-run from the collector
 
@@ -80,6 +80,8 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 | `GARMIN_KEEPALIVE_INTERVAL` | Seconds between in-process keepalive runs (`0` disables). Keepalive uses a lightweight Garmin API call to keep sessions warm and reduce browser reseed during manual collections. |
 | `GARMIN_BROWSER_LOGIN` | `1` = always allow collector-triggered Playwright; `0` = never; **unset** = allow when stdin is a **TTY** (heuristic; set `1` only if recovery never opens a browser on your host) |
 | `GARMIN_PLAYWRIGHT_CHROME` | When set truthy, collector passes `--chrome` to the helper (system Google Chrome) |
+| `GARMIN_PLAYWRIGHT_PROFILE` | Persistent browser user-data dir (default `.garmin-browser-profile/`); `0`/`ephemeral` disables |
+| `GARMIN_PLAYWRIGHT_EPHEMERAL` | `1` = fresh context each run (no persistent profile) |
 | `COLLECTOR_HEALTH_INTERVAL` | Seconds between collector health heartbeats to rehab-platform (`0` disables). |
 | `COLLECTOR_HEALTH_ENDPOINT` | Relative path for heartbeat POST JSON payloads (default `/api/collector/health`; `404` is tolerated). |
 | `COLLECTOR_ID` | Optional stable identifier included in heartbeat payloads (defaults to hostname). |

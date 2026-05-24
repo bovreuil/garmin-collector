@@ -8,6 +8,8 @@ Use when programmatic login hits HTTP 429. Requires:
   python -m playwright install chromium
 
 Env (same as collector): GARMIN_EMAIL, GARMIN_PASSWORD, optional GARMINTOKENS,
+optional GARMIN_PLAYWRIGHT_PROFILE (persistent Chrome user data; default
+``.garmin-browser-profile/``), optional GARMIN_PLAYWRIGHT_EPHEMERAL=1,
 optional .env via python-dotenv.
 
 After login, tokens are resolved from: ``JWT_WEB`` cookie and intercepted
@@ -88,6 +90,52 @@ def resolve_token_dir(explicit: str | None = None) -> Path:
     if not p.is_absolute():
         p = (root / p).resolve()
     return p
+
+
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def resolve_browser_profile_dir(
+    explicit: str | None = None,
+    *,
+    ephemeral: bool = False,
+) -> Path | None:
+    """
+    Directory for ``launch_persistent_context`` (cookies, SSO trust, Cloudflare).
+
+    Returns None when ephemeral (fresh context each run).
+    """
+    if ephemeral or _truthy_env("GARMIN_PLAYWRIGHT_EPHEMERAL"):
+        return None
+    root = _project_root()
+    raw = explicit if explicit is not None else os.getenv("GARMIN_PLAYWRIGHT_PROFILE")
+    if raw is not None and str(raw).strip().lower() in (
+        "0",
+        "false",
+        "off",
+        "no",
+        "ephemeral",
+        "none",
+    ):
+        return None
+    if raw:
+        p = Path(raw).expanduser()
+        if not p.is_absolute():
+            p = (root / p).resolve()
+        return p
+    return root / ".garmin-browser-profile"
+
+
+def _check_remember_me(page: Any) -> None:
+    """Tick SSO 'Remember Me' when present (longer-lived SSO cookies)."""
+    try:
+        remember = page.locator('input[name="remember"][type="checkbox"]').first
+        if remember.count() > 0 and not remember.is_checked():
+            remember.check()
+            time.sleep(0.15)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _cookies_list_to_dict(cookies: list[dict[str, Any]]) -> dict[str, str]:
@@ -557,6 +605,86 @@ def _debug_shot(page: Any, token_dir: Path) -> Path:
     return path
 
 
+def _launch_browser_context(
+    p: Any,
+    profile_dir: Path | None,
+    *,
+    headless: bool,
+    use_chrome: bool,
+) -> tuple[Any | None, Any, Any]:
+    """Return (browser_or_none, context, page). browser is set only for ephemeral launch."""
+    launch_kwargs: dict[str, Any] = {
+        "headless": headless,
+        "args": ["--disable-blink-features=AutomationControlled"],
+        "ignore_default_args": ["--enable-automation"],
+    }
+    if use_chrome:
+        launch_kwargs["channel"] = "chrome"
+
+    context_kwargs: dict[str, Any] = {
+        "viewport": {"width": 1280, "height": 900},
+        "user_agent": _DEFAULT_UA,
+        "locale": "en-GB",
+        "timezone_id": "Europe/London",
+        "color_scheme": "light",
+    }
+
+    def _launch_persistent() -> Any:
+        assert profile_dir is not None
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        return p.chromium.launch_persistent_context(
+            str(profile_dir),
+            **launch_kwargs,
+            **context_kwargs,
+        )
+
+    def _launch_ephemeral() -> tuple[Any, Any]:
+        browser = p.chromium.launch(**launch_kwargs)
+        context = browser.new_context(**context_kwargs)
+        return browser, context
+
+    if profile_dir is not None:
+        _LOGGER.info("Using persistent browser profile: %s", profile_dir)
+        try:
+            context = _launch_persistent()
+        except Exception as e:
+            if use_chrome:
+                _LOGGER.warning(
+                    "Persistent launch with channel=chrome failed (%s); using Chromium.",
+                    e,
+                )
+                launch_kwargs.pop("channel", None)
+                context = _launch_persistent()
+            else:
+                raise
+        context.add_init_script(_STEALTH_INIT)
+        page = context.pages[0] if context.pages else context.new_page()
+        return None, context, page
+
+    _LOGGER.info("Ephemeral browser context (no persistent profile)")
+    try:
+        browser, context = _launch_ephemeral()
+    except Exception as e:
+        if use_chrome:
+            _LOGGER.warning("Launch with channel=chrome failed (%s); using Chromium.", e)
+            launch_kwargs.pop("channel", None)
+            browser, context = _launch_ephemeral()
+        else:
+            raise
+    context.add_init_script(_STEALTH_INIT)
+    page = context.new_page()
+    return browser, context, page
+
+
+def _close_browser_context(
+    browser: Any | None,
+    context: Any,
+) -> None:
+    context.close()
+    if browser is not None:
+        browser.close()
+
+
 def run_login(
     email: str,
     password: str,
@@ -568,6 +696,7 @@ def run_login(
     entry: str,
     manual: bool,
     no_submit: bool,
+    profile_dir: Path | None,
 ) -> Path:
     try:
         from playwright.sync_api import sync_playwright
@@ -625,34 +754,13 @@ def run_login(
         except Exception:  # noqa: BLE001
             pass
 
-    launch_kwargs: dict[str, Any] = {
-        "headless": headless,
-        "args": ["--disable-blink-features=AutomationControlled"],
-        "ignore_default_args": ["--enable-automation"],
-    }
-    if use_chrome:
-        launch_kwargs["channel"] = "chrome"
-
     with sync_playwright() as p:
-        try:
-            browser = p.chromium.launch(**launch_kwargs)
-        except Exception as e:
-            if use_chrome:
-                _LOGGER.warning("Launch with channel=chrome failed (%s); using Chromium.", e)
-                launch_kwargs.pop("channel", None)
-                browser = p.chromium.launch(**launch_kwargs)
-            else:
-                raise
-
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 900},
-            user_agent=_DEFAULT_UA,
-            locale="en-GB",
-            timezone_id="Europe/London",
-            color_scheme="light",
+        browser, context, page = _launch_browser_context(
+            p,
+            profile_dir,
+            headless=headless,
+            use_chrome=use_chrome,
         )
-        context.add_init_script(_STEALTH_INIT)
-        page = context.new_page()
         page.on("response", on_response)
 
         csrf_from_request: dict[str, str] = {}
@@ -704,6 +812,7 @@ def run_login(
             pw_box.wait_for(state="visible", timeout=30000)
             pw_box.fill(password)
             time.sleep(0.45)
+            _check_remember_me(page)
 
             if no_submit:
                 _LOGGER.info(
@@ -831,7 +940,7 @@ def run_login(
             time.sleep(4.0)
 
         cookies_raw = context.cookies()
-        browser.close()
+        _close_browser_context(browser, context)
 
     cookie_dict = _cookies_list_to_dict(cookies_raw)
 
@@ -921,6 +1030,18 @@ def main() -> None:
         action="store_true",
         help="Fill email/password but you click Sign in (helps if auto-submit is blocked)",
     )
+    parser.add_argument(
+        "--profile-dir",
+        type=Path,
+        default=None,
+        help="Persistent Chrome user data dir (default: GARMIN_PLAYWRIGHT_PROFILE or "
+        ".garmin-browser-profile). Reuse reduces SSO/Cloudflare challenges.",
+    )
+    parser.add_argument(
+        "--ephemeral",
+        action="store_true",
+        help="Fresh browser context each run (no persistent profile)",
+    )
     args = parser.parse_args()
 
     email = os.getenv("GARMIN_EMAIL", "")
@@ -936,6 +1057,10 @@ def main() -> None:
     token_dir = resolve_token_dir(
         str(args.token_dir) if args.token_dir is not None else None
     )
+    profile_dir = resolve_browser_profile_dir(
+        str(args.profile_dir) if args.profile_dir is not None else None,
+        ephemeral=args.ephemeral,
+    )
 
     try:
         out = run_login(
@@ -948,6 +1073,7 @@ def main() -> None:
             entry=args.entry,
             manual=args.manual,
             no_submit=args.no_submit,
+            profile_dir=profile_dir,
         )
     except Exception as e:
         _LOGGER.error("%s", e)

@@ -61,6 +61,8 @@ That writes `garmin_tokens.json` under `GARMINTOKENS` (e.g. `.garmin-tokens/`) i
 
 **`GARMIN_BROWSER_LOGIN` (optional):** Playwright can refresh Garmin sessions when password login returns **429**, tokens are **stale/expired**, etc. By default the collector allows that when **`GARMIN_BROWSER_LOGIN=1`** **or** when **`sys.stdin.isatty()`** is true (interactive terminal — many Windows **Task Scheduler** + `.bat` runs still satisfy this). Set **`GARMIN_BROWSER_LOGIN=1`** only if your environment **never** opens a browser during recovery; set **`0`** to disable auto-browser entirely (manual `scripts/garmin_playwright_login.py` only). **`GARMIN_PLAYWRIGHT_CHROME=1`** passes **`--chrome`**. See `env.example`. Install browser deps as above.
 
+Playwright login uses a **persistent browser profile** by default (``.garmin-browser-profile/``, gitignored) so Garmin/Cloudflare see the same device across reseeds. Override with **`GARMIN_PLAYWRIGHT_PROFILE`**; set **`GARMIN_PLAYWRIGHT_EPHEMERAL=1`** for a fresh context each time.
+
 If the SSO page shows a red **“unexpected error”** banner (or JWT capture still fails), try in order: **`python scripts/garmin_playwright_login.py --chrome --verify`** (requires [Google Chrome](https://www.google.com/chrome/) installed), **`--no-submit`** (script fills the form; you click Sign in), **`--entry portal`**, or **`--manual`** (you sign in entirely by hand; waits up to 10 minutes). Check `garmin-login-debug.png` under your token directory if the script saves a screenshot.
 
 ### 2. Configure Environment Variables
