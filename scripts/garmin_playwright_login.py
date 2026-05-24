@@ -127,15 +127,56 @@ def resolve_browser_profile_dir(
     return root / ".garmin-browser-profile"
 
 
+def _sso_form_visible(page: Any, *, timeout_ms: int = 5000) -> bool:
+    """True when Garmin SSO email field is on screen (needs password login)."""
+    loc = page.locator(
+        'input[type="email"], input[name="email"], input#email, '
+        'input[name="username"], input[autocomplete="username"], '
+        'input[autocomplete="email"]'
+    ).first
+    try:
+        return loc.is_visible(timeout=timeout_ms)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _on_connect_app(page: Any) -> bool:
+    return bool(_CONNECT_URL_RE.search(page.url))
+
+
 def _check_remember_me(page: Any) -> None:
     """Tick SSO 'Remember Me' when present (longer-lived SSO cookies)."""
+    if "sso.garmin.com" not in page.url and "sign-in" not in page.url.lower():
+        return
+    short = 3000
     try:
-        remember = page.locator('input[name="remember"][type="checkbox"]').first
-        if remember.count() > 0 and not remember.is_checked():
-            remember.check()
-            time.sleep(0.15)
+        by_role = page.get_by_role("checkbox", name=re.compile(r"remember\s*me", re.I))
+        if by_role.count() > 0:
+            box = by_role.first
+            if not box.is_checked(timeout=short):
+                box.check(force=True, timeout=short)
+                _LOGGER.info("Checked Remember Me (role=checkbox)")
+                return
     except Exception:  # noqa: BLE001
         pass
+    try:
+        inp = page.locator('input[name="remember"][type="checkbox"]').first
+        if inp.count() == 0:
+            return
+        if inp.is_checked(timeout=short):
+            return
+        label = page.locator(
+            "fieldset.signin__form__input--remember label, "
+            'g-checkbox:has-text("Remember Me") label'
+        ).first
+        if label.count() > 0:
+            label.click(timeout=short)
+            _LOGGER.info("Checked Remember Me (label click)")
+            return
+        inp.check(force=True, timeout=short)
+        _LOGGER.info("Checked Remember Me (force check on input)")
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.debug("Remember Me not set: %s", e)
 
 
 def _cookies_list_to_dict(cookies: list[dict[str, Any]]) -> dict[str, str]:
@@ -582,6 +623,52 @@ def _verify_session(token_dir: Path) -> None:
         )
 
 
+def _fill_sso_and_maybe_submit(
+    page: Any,
+    email: str,
+    password: str,
+    token_dir: Path,
+    *,
+    no_submit: bool,
+) -> None:
+    email_box = page.locator(
+        'input[type="email"], input[name="email"], input#email, '
+        'input[name="username"], input[autocomplete="username"], '
+        'input[autocomplete="email"]'
+    ).first
+    email_box.click()
+    email_box.fill(email)
+    pw_box = page.locator(
+        'input[type="password"], input[name="password"], input#password'
+    ).first
+    pw_box.wait_for(state="visible", timeout=30000)
+    pw_box.fill(password)
+    _check_remember_me(page)
+
+    if no_submit:
+        _LOGGER.info("Filled credentials. Click “Sign in” in the browser when ready.")
+        return
+
+    role_btn = page.get_by_role("button", name=re.compile(r"sign\s*in|log\s*in", re.I))
+    if role_btn.count() > 0:
+        role_btn.first.click()
+    else:
+        page.locator('button[type="submit"]').first.click()
+
+    for _ in range(25):
+        time.sleep(1)
+        if _on_connect_app(page):
+            break
+        if _sso_error_banner_visible(page):
+            dbg = _debug_shot(page, token_dir)
+            raise RuntimeError(
+                "Garmin SSO showed an error (common when automation is detected). "
+                f"Screenshot: {dbg}. Try: --chrome (install Google Chrome), "
+                "--no-submit (you click Sign in), --entry portal, or --manual "
+                "(complete login yourself)."
+            )
+
+
 def _sso_error_banner_visible(page: Any) -> bool:
     try:
         for pattern in (
@@ -613,10 +700,14 @@ def _launch_browser_context(
     use_chrome: bool,
 ) -> tuple[Any | None, Any, Any]:
     """Return (browser_or_none, context, page). browser is set only for ephemeral launch."""
+    ignore_args = ["--enable-automation"]
+    if use_chrome:
+        # Playwright adds --no-sandbox by default; system Chrome warns it is unsupported.
+        ignore_args.append("--no-sandbox")
     launch_kwargs: dict[str, Any] = {
         "headless": headless,
         "args": ["--disable-blink-features=AutomationControlled"],
-        "ignore_default_args": ["--enable-automation"],
+        "ignore_default_args": ignore_args,
     }
     if use_chrome:
         launch_kwargs["channel"] = "chrome"
@@ -796,49 +887,32 @@ def run_login(
                 pass
 
         if not manual:
-            email_box = page.locator(
-                'input[type="email"], input[name="email"], input#email, '
-                'input[name="username"], input[autocomplete="username"], '
-                'input[autocomplete="email"]'
-            ).first
-            email_box.wait_for(state="visible", timeout=120000)
-            email_box.click()
-            time.sleep(0.15)
-            email_box.fill(email)
-            time.sleep(0.2)
-            pw_box = page.locator(
-                'input[type="password"], input[name="password"], input#password'
-            ).first
-            pw_box.wait_for(state="visible", timeout=30000)
-            pw_box.fill(password)
-            time.sleep(0.45)
-            _check_remember_me(page)
-
-            if no_submit:
+            if _sso_form_visible(page, timeout_ms=8000):
+                _fill_sso_and_maybe_submit(
+                    page, email, password, token_dir, no_submit=no_submit
+                )
+            elif _on_connect_app(page):
                 _LOGGER.info(
-                    "Filled credentials. Click “Sign in” in the browser when ready."
+                    "Persistent profile already signed in; skipping SSO (exporting tokens)"
                 )
             else:
-                role_btn = page.get_by_role(
-                    "button", name=re.compile(r"sign\s*in|log\s*in", re.I)
-                )
-                if role_btn.count() > 0:
-                    role_btn.first.click()
+                _LOGGER.info("Waiting for SSO form or Connect redirect…")
+                try:
+                    page.wait_for_url(_CONNECT_URL_RE, timeout=60_000)
+                except Exception:  # noqa: BLE001
+                    pass
+                if _on_connect_app(page):
+                    _LOGGER.info("Reached Connect without SSO form")
+                elif _sso_form_visible(page, timeout_ms=120_000):
+                    _fill_sso_and_maybe_submit(
+                        page, email, password, token_dir, no_submit=no_submit
+                    )
                 else:
-                    page.locator('button[type="submit"]').first.click()
-
-                for _ in range(25):
-                    time.sleep(1)
-                    if "connect.garmin.com" in page.url:
-                        break
-                    if _sso_error_banner_visible(page):
-                        dbg = _debug_shot(page, token_dir)
-                        raise RuntimeError(
-                            "Garmin SSO showed an error (common when automation is detected). "
-                            f"Screenshot: {dbg}. Try: --chrome (install Google Chrome), "
-                            "--no-submit (you click Sign in), --entry portal, or --manual "
-                            "(complete login yourself)."
-                        )
+                    dbg = _debug_shot(page, token_dir)
+                    raise RuntimeError(
+                        "Neither SSO sign-in nor Connect home appeared. "
+                        f"Screenshot: {dbg}"
+                    )
         else:
             _LOGGER.info(
                 "Manual mode: complete sign-in in the browser. "
