@@ -93,6 +93,17 @@ class TransientGarminNetworkError(Exception):
     """TLS/socket drop or similar from Garmin edge — collector retries once with a fresh client."""
 
 
+def _garmin_network_error_for_retry(exc: BaseException) -> TransientGarminNetworkError | None:
+    """Map connectapi connection failures (e.g. Windows 10054) to a retryable keepalive/job error."""
+    if isinstance(exc, TransientGarminNetworkError):
+        return exc
+    if isinstance(exc, GarminConnectConnectionError) and _transient_garmin_network_error(exc):
+        err = TransientGarminNetworkError(str(exc))
+        err.__cause__ = exc
+        return err
+    return None
+
+
 def _transient_garmin_network_error(exc: BaseException) -> bool:
     if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
         return True
@@ -391,10 +402,32 @@ class GarminCollector:
                         self._reseed_via_browser_after_token_clear("keepalive auth failure")
                         self._current_task = "keepalive"
                         continue
-                    except TransientGarminNetworkError:
-                        if retried_network:
+                    except (GarminConnectConnectionError, TransientGarminNetworkError) as e:
+                        network_err = _garmin_network_error_for_retry(e)
+                        if network_err is None:
                             raise
+                        if retried_network:
+                            if _browser_login_enabled():
+                                logger.warning(
+                                    "Keepalive network still failing after retry; "
+                                    "reseeding via browser so the next job stays fast"
+                                )
+                                self.invalidate_garmin_client()
+                                self._clear_stored_garmin_tokens()
+                                self._current_task = "reseed"
+                                self._reseed_via_browser_after_token_clear(
+                                    "keepalive network failure after retry"
+                                )
+                                self._current_task = "keepalive"
+                                retried_network = False
+                                retried_auth = False
+                                continue
+                            raise network_err
                         retried_network = True
+                        logger.warning(
+                            "Keepalive transient network error; invalidating and retrying once: %s",
+                            network_err,
+                        )
                         self.invalidate_garmin_client()
                         time.sleep(2)
                         continue

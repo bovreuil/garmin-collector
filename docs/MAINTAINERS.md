@@ -77,7 +77,7 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 |----------|---------|
 | `GARMIN_EMAIL` / `GARMIN_PASSWORD` | Required for programmatic path and for Playwright auto-fill |
 | `GARMINTOKENS` | Directory for `garmin_tokens.json` (default `.garmin-tokens` under repo root) |
-| `GARMIN_KEEPALIVE_INTERVAL` | Seconds between in-process keepalive runs (`0` disables). Keepalive uses a lightweight Garmin API call to keep sessions warm and reduce browser reseed during manual collections. |
+| `GARMIN_KEEPALIVE_INTERVAL` | Seconds between in-process keepalive runs (`0` disables). Keepalive uses a lightweight Garmin API call to keep sessions warm and reduce browser reseed during manual collections. On **10054** / connection abort it retries like a job; if still failing and `GARMIN_BROWSER_LOGIN=1`, it runs Playwright immediately so the next manual collect does not pay the ~50s browser cost. |
 | `GARMIN_BROWSER_LOGIN` | `1` = always allow collector-triggered Playwright; `0` = never; **unset** = allow when stdin is a **TTY** (heuristic; set `1` only if recovery never opens a browser on your host) |
 | `GARMIN_PLAYWRIGHT_CHROME` | Use system Google Chrome for Playwright; **on Windows defaults to on** when unset. Set `0` to force Chromium. Use the **same** browser for manual `--chrome` seeding and collector recovery (shared `.garmin-browser-profile/`) |
 | `GARMIN_PLAYWRIGHT_PROFILE` | Persistent browser user-data dir (default `.garmin-browser-profile/`); `0`/`ephemeral` disables |
