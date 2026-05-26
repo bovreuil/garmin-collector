@@ -1,5 +1,5 @@
 ---
-description: Canonical pytest command for Cursor agents—PDM, VCR, no live Garmin without approval.
+description: Canonical pytest command for Cursor agents—PDM, collector tests only, no live Garmin without approval.
 alwaysApply: true
 ---
 
@@ -12,24 +12,37 @@ alwaysApply: true
 From **repo root**:
 
 ```bash
+pdm install --group :all   # once per clone; skip if .venv already has deps
 pdm run test
 ```
 
 Equivalent:
 
 ```bash
-pdm run coverage run -m pytest -v --durations=10
+pdm run coverage run -m pytest -v --durations=10 \
+  tests/test_client_token_file.py tests/test_keepalive_network.py \
+  tests/test_playwright_chrome_default.py tests/test_session_readiness.py
 ```
 
-If PDM is not set up:
+This runs **collector unit tests only** (mocked; no live Garmin).
+
+## Do not report upstream VCR failures
+
+`tests/test_garmin.py` and `tests/cassettes/` are **inherited from upstream python-garminconnect**. They are **not** part of canonical verify. Cassettes are stale vs the vendored **react** auth stack; CI pytest for them is disabled.
+
+- **Do not** run `pdm run test-vcr` or `tests/test_garmin.py` unless the user explicitly asks or you are syncing **`garminconnect/`** with upstream and re-recording cassettes (requires user approval for live Garmin).
+- **Do not** tell the user that "tests failed" because `test_garmin.py` failed when `pdm run test` passes.
+- **Do** report pass/fail of **`pdm run test`** after collector/auth/keepalive changes.
+
+Optional maintainer command (not canonical verify):
 
 ```bash
-pdm install --group :all
+pdm run test-vcr
 ```
 
 ## Agent constraints
 
-- Prefer **existing VCR cassettes** (`tests/test_garmin.py`, `tests/test_client_token_file.py`). Do **not** re-record cassettes or call live Garmin APIs without **explicit user approval**.
+- Do **not** re-record VCR cassettes or call live Garmin APIs without **explicit user approval**.
 - Do **not** run **`python collector.py --poll`** against production rehab-platform or live Garmin without user approval.
 - Do **not** run **`scripts/garmin_playwright_login.py`** unless the user asks—browser login is user-operated on the trusted machine.
 

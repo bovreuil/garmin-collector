@@ -16,7 +16,7 @@ From repo root (PDM installed):
 pdm run test
 ```
 
-Details, VCR cassettes, and Garmin API constraints: **[`.cursor/rules/python-agent-verify.mdc`](.cursor/rules/python-agent-verify.mdc)**.
+Details and Garmin API constraints: **[`.cursor/rules/python-agent-verify.mdc`](.cursor/rules/python-agent-verify.mdc)** (`pdm run test` = collector unit tests only; upstream VCR is optional).
 
 **Auth / Garmin API changes:** read **[`docs/MAINTAINERS.md`](docs/MAINTAINERS.md)** before editing `collector.py`, `garminconnect/`, or `scripts/garmin_playwright_login.py`. See also **[`.cursor/rules/auth-and-garmin-api.mdc`](.cursor/rules/auth-and-garmin-api.mdc)**.
 

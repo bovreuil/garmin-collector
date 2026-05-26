@@ -11,6 +11,8 @@ alwaysApply: true
 - Changes to **`garminconnect/`** client behaviour that affect login, headers, or API error handling
 - Bug fixes in those areas should include or extend a test where practical
 
+Add or extend tests under **`tests/test_*.py`** excluding **`tests/test_garmin.py`** (upstream VCR; see below).
+
 ## When tests are NOT required
 
 - README or env.example documentation only
@@ -19,8 +21,8 @@ alwaysApply: true
 
 ## How to test
 
-- Run **`pdm run test`** from repo root (see **`python-agent-verify.mdc`**)
-- Prefer **VCR cassettes** in `tests/test_garmin.py` for API-shaped behaviour—do not re-record against live Garmin without user approval
+- Run **`pdm run test`** from repo root (see **`python-agent-verify.mdc`**) — **collector unit tests only**
+- **`tests/test_garmin.py`** is upstream VCR baggage; not canonical verify. Use **`pdm run test-vcr`** only when explicitly syncing **`garminconnect/`** with upstream (do not re-record against live Garmin without user approval)
 - Use **tdd-working-cycle** / **bdd-example-workshop** skills only when the user explicitly asks—not by default
 
 ## On failure
