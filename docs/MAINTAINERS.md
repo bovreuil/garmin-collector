@@ -77,7 +77,9 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 |----------|---------|
 | `GARMIN_EMAIL` / `GARMIN_PASSWORD` | Required for programmatic path and for Playwright auto-fill |
 | `GARMINTOKENS` | Directory for `garmin_tokens.json` (default `.garmin-tokens` under repo root) |
-| `GARMIN_KEEPALIVE_INTERVAL` | Seconds between in-process keepalive runs (`0` disables). Keepalive uses a lightweight Garmin API call to keep sessions warm and reduce browser reseed during manual collections. On **10054** / connection abort it retries like a job; if still failing and `GARMIN_BROWSER_LOGIN=1`, it runs Playwright immediately so the next manual collect does not pay the ~50s browser cost. |
+| `GARMIN_KEEPALIVE_INTERVAL` | Seconds between scheduled session-readiness runs (`0` disables). Each run proactively calls **`di-oauth/refresh`**, probes **`dailyHeartRate`** for today (same path as jobs), and on **401** / **10054** retries like a job; if still failing and `GARMIN_BROWSER_LOGIN=1`, runs Playwright so the next manual collect stays fast. Also runs before pending jobs when overdue, stale, or not collection-ready. |
+| `GARMIN_KEEPALIVE_POSTPONE_AFTER_COLLECT_SEC` | After a **successful** user collection, postpone the next readiness check (default **900**). Capped at `GARMIN_KEEPALIVE_INTERVAL`. |
+| `GARMIN_SESSION_STALE_SEC` | Pre-warm before jobs when `last_garmin_ok_utc` is older than this (default **1200**). |
 | `GARMIN_BROWSER_LOGIN` | `1` = always allow collector-triggered Playwright; `0` = never; **unset** = allow when stdin is a **TTY** (heuristic; set `1` only if recovery never opens a browser on your host) |
 | `GARMIN_PLAYWRIGHT_CHROME` | Use system Google Chrome for Playwright; **on Windows defaults to on** when unset. Set `0` to force Chromium. Use the **same** browser for manual `--chrome` seeding and collector recovery (shared `.garmin-browser-profile/`) |
 | `GARMIN_PLAYWRIGHT_PROFILE` | Persistent browser user-data dir (default `.garmin-browser-profile/`); `0`/`ephemeral` disables |
@@ -128,6 +130,7 @@ This section lists **real failures** seen in production/dev (March 2026) and how
 | **`Not authenticated`** from **`get_api_headers()`** (before HTTP) | **`jwt_web`** / **`csrf_token`** missing in memory (e.g. bad refresh, partial load). | Must **not** be wrapped as generic **`Connection error`** in **`Garmin.connectapi`**; must propagate **`GarminConnectAuthenticationError`** so the same **clear + reseed** path runs (March 2026 Windows). |
 | **`Connection error:`** / **`Connection aborted`** / **`ConnectionResetError`** / **`10054`** / **`ProtocolError`** | Remote or edge **closed the socket**; often transient. | **`TransientGarminNetworkError`**: **invalidate** client, **sleep ~2s**, retry **once**; if still failing → **`garmin_network`**, job **`failed`**. |
 | Playwright **`OK: wrote … garmin_tokens.json`** | Browser session captured. | Next **`login(path)`** loads file; collection continues. |
+| **`Session readiness ok/refreshed/reseeded`** (scheduled or **`pending_jobs`**) | Background readiness: **`di-oauth/refresh`** + **`dailyHeartRate`** probe succeeded, or browser reseed completed. | User collects should stay **`fast_lt_10s`**; health **`collection_ready: true`**. Failures set **`collection_ready: false`** and may trigger reseed before the job runs **`running`**. |
 
 ### 6.3 Operator checklist when jobs look wrong
 

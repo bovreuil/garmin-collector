@@ -16,7 +16,7 @@ import sys
 import socket
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -163,6 +163,10 @@ class GarminCollector:
         self._garmin_lock = threading.Lock()
 
         self.keepalive_interval = int(os.getenv("GARMIN_KEEPALIVE_INTERVAL", "0"))
+        self.keepalive_postpone_after_collect = int(
+            os.getenv("GARMIN_KEEPALIVE_POSTPONE_AFTER_COLLECT_SEC", "900")
+        )
+        self.session_stale_sec = int(os.getenv("GARMIN_SESSION_STALE_SEC", "1200"))
         self.health_interval = int(os.getenv("COLLECTOR_HEALTH_INTERVAL", "60"))
         self.collector_id = os.getenv("COLLECTOR_ID", socket.gethostname())
         self.health_endpoint = os.getenv("COLLECTOR_HEALTH_ENDPOINT", "/api/collector/health")
@@ -189,6 +193,10 @@ class GarminCollector:
         self._collection_last_duration_ms: Optional[int] = None
         self._collection_last_result: Optional[str] = None
         self._collection_events: List[Dict[str, str]] = []
+
+        self._collection_ready = False
+        self._last_collection_probe_utc: Optional[str] = None
+
         logger.info("Garmin token storage directory: %s", self._tokenstore_path)
         if self.keepalive_interval > 0:
             logger.info("Garmin keepalive enabled every %ss", self.keepalive_interval)
@@ -273,11 +281,55 @@ class GarminCollector:
         self._trim_events_24h(self._collection_events)
 
     def _set_last_error(self, kind: str, message: str) -> None:
+        self._collection_ready = False
         self._last_error = {
             "kind": kind,
             "message": message[:300],
             "at_utc": self._now_utc(),
         }
+
+    def _minutes_since_utc(self, ts: Optional[str]) -> Optional[int]:
+        if not ts:
+            return None
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return int((datetime.now(timezone.utc) - dt).total_seconds() // 60)
+        except ValueError:
+            return None
+
+    def _postpone_keepalive_after_collect(self) -> None:
+        delay = min(self.keepalive_postpone_after_collect, self.keepalive_interval)
+        self._next_keepalive_monotonic = time.monotonic() + delay
+
+    def _should_run_readiness_before_jobs(self) -> bool:
+        if time.monotonic() >= self._next_keepalive_monotonic:
+            return True
+        if not self._collection_ready:
+            return True
+        if self._last_garmin_ok_utc is None:
+            return True
+        age_sec = (self._minutes_since_utc(self._last_garmin_ok_utc) or 0) * 60
+        return age_sec >= self.session_stale_sec
+
+    def _probe_session_collection(self, api: Garmin) -> None:
+        """Proactive JWT refresh and wellness probe (same path as job collection)."""
+        token_path = _token_json_path(self._tokenstore_path)
+        mtime_before_refresh = token_path.stat().st_mtime if token_path.exists() else None
+        api.client._refresh_session()
+        mtime_after = token_path.stat().st_mtime if token_path.exists() else None
+        if (
+            mtime_before_refresh is not None
+            and mtime_after is not None
+            and mtime_after > mtime_before_refresh
+        ):
+            self._last_auth_refresh_utc = self._now_utc()
+
+        today = date.today().isoformat()
+        if api.display_name:
+            api.get_heart_rates(today)
+        else:
+            logger.debug("No display_name; falling back to user-settings probe")
+            api.connectapi(api.garmin_connect_user_settings_url)
 
     def _set_ok(self) -> None:
         self._last_garmin_ok_utc = self._now_utc()
@@ -328,9 +380,18 @@ class GarminCollector:
             "version": os.getenv("COLLECTOR_VERSION", "unknown"),
             "garmin": {
                 "session_state": self._garmin_session_state(),
+                "collection_ready": self._collection_ready,
                 "last_ok_utc": self._last_garmin_ok_utc,
+                "last_collection_probe_utc": self._last_collection_probe_utc,
                 "last_auth_refresh_utc": self._last_auth_refresh_utc,
                 "last_browser_reseed_utc": self._last_browser_reseed_utc,
+                "minutes_since_last_ok": self._minutes_since_utc(self._last_garmin_ok_utc),
+                "minutes_since_auth_refresh": self._minutes_since_utc(
+                    self._last_auth_refresh_utc
+                ),
+                "minutes_since_browser_reseed": self._minutes_since_utc(
+                    self._last_browser_reseed_utc
+                ),
                 "last_error": self._last_error,
             },
             "keepalive": {
@@ -372,10 +433,8 @@ class GarminCollector:
         except requests.RequestException as e:
             logger.debug("Collector health heartbeat failed: %s", e)
 
-    def run_keepalive_once(self) -> None:
-        if self.keepalive_interval <= 0:
-            return
-        started = time.monotonic()
+    def _run_session_readiness(self, *, reason: str) -> str:
+        """Refresh JWT and probe wellness API; return ok|refreshed|reseeded|failed."""
         result = "failed"
         token_path = _token_json_path(self._tokenstore_path)
         before_mtime = token_path.stat().st_mtime if token_path.exists() else None
@@ -389,17 +448,22 @@ class GarminCollector:
                 while True:
                     try:
                         api = self.get_garmin_api()
-                        api.connectapi(api.garmin_connect_user_settings_url)
+                        self._probe_session_collection(api)
                         break
                     except GarminConnectAuthenticationError as e:
                         if retried_auth:
                             raise
                         retried_auth = True
-                        logger.warning("Keepalive auth failed; clearing tokens and retrying once: %s", e)
+                        logger.warning(
+                            "Session readiness auth failed; clearing tokens and retrying once: %s",
+                            e,
+                        )
                         self._clear_stored_garmin_tokens()
                         self.invalidate_garmin_client()
                         self._current_task = "reseed"
-                        self._reseed_via_browser_after_token_clear("keepalive auth failure")
+                        self._reseed_via_browser_after_token_clear(
+                            f"session readiness auth failure ({reason})"
+                        )
                         self._current_task = "keepalive"
                         continue
                     except (GarminConnectConnectionError, TransientGarminNetworkError) as e:
@@ -409,14 +473,14 @@ class GarminCollector:
                         if retried_network:
                             if _browser_login_enabled():
                                 logger.warning(
-                                    "Keepalive network still failing after retry; "
+                                    "Session readiness network still failing after retry; "
                                     "reseeding via browser so the next job stays fast"
                                 )
                                 self.invalidate_garmin_client()
                                 self._clear_stored_garmin_tokens()
                                 self._current_task = "reseed"
                                 self._reseed_via_browser_after_token_clear(
-                                    "keepalive network failure after retry"
+                                    f"session readiness network failure ({reason})"
                                 )
                                 self._current_task = "keepalive"
                                 retried_network = False
@@ -425,7 +489,8 @@ class GarminCollector:
                             raise network_err
                         retried_network = True
                         logger.warning(
-                            "Keepalive transient network error; invalidating and retrying once: %s",
+                            "Session readiness transient network error; "
+                            "invalidating and retrying once: %s",
                             network_err,
                         )
                         self.invalidate_garmin_client()
@@ -433,6 +498,8 @@ class GarminCollector:
                         continue
 
                 self._set_ok()
+                self._collection_ready = True
+                self._last_collection_probe_utc = self._now_utc()
                 after_mtime = token_path.stat().st_mtime if token_path.exists() else None
                 browser_after = self._last_browser_reseed_utc
                 if browser_after and browser_after != browser_before:
@@ -443,19 +510,41 @@ class GarminCollector:
                 else:
                     result = "ok"
             except GarminConnectTooManyRequestsError as e:
+                self._collection_ready = False
                 self._set_last_error("garmin_rate_limit", str(e))
             except GarminConnectAuthenticationError as e:
+                self._collection_ready = False
                 self._set_last_error("garmin_auth", str(e))
             except Exception as e:
-                self._set_last_error("garmin_network" if _transient_garmin_network_error(e) else "garmin_unknown", str(e))
-                logger.warning("Keepalive failed: %s", e)
+                self._collection_ready = False
+                self._set_last_error(
+                    "garmin_network" if _transient_garmin_network_error(e) else "garmin_unknown",
+                    str(e),
+                )
+                logger.warning("Session readiness failed (%s): %s", reason, e)
             finally:
                 self._current_task = "idle"
+
+        return result
+
+    def run_keepalive_once(self, *, reason: str = "scheduled") -> None:
+        if self.keepalive_interval <= 0:
+            return
+        started = time.monotonic()
+        result = self._run_session_readiness(reason=reason)
+        duration_ms = int((time.monotonic() - started) * 1000)
+        if result != "failed":
+            logger.info(
+                "Session readiness %s (reason=%s, duration_ms=%s)",
+                result,
+                reason,
+                duration_ms,
+            )
 
         # Schedule next keepalive before emitting heartbeat so next_due is accurate.
         self._next_keepalive_monotonic = time.monotonic() + self.keepalive_interval
         self._keepalive_last_run_utc = self._now_utc()
-        self._keepalive_last_duration_ms = int((time.monotonic() - started) * 1000)
+        self._keepalive_last_duration_ms = duration_ms
         self._keepalive_last_result = result
         self._record_keepalive_event(result)
         self.send_health_heartbeat(force=True)
@@ -1240,9 +1329,9 @@ class GarminCollector:
                 self._collection_last_result = result_state
                 self._record_collection_event(duration_ms, result_state)
                 if result_state == "success" and self.keepalive_interval > 0:
-                    # A successful collection confirms the Garmin session is warm;
-                    # postpone keepalive to avoid an immediate redundant warm-up call.
-                    self._next_keepalive_monotonic = time.monotonic() + self.keepalive_interval
+                    self._collection_ready = True
+                    self._last_collection_probe_utc = self._now_utc()
+                    self._postpone_keepalive_after_collect()
                 self.send_health_heartbeat(force=True)
     
     def run_polling_loop(self, poll_interval: int = 60):
@@ -1267,7 +1356,10 @@ class GarminCollector:
                 
                 if jobs:
                     logger.info(f"Found {len(jobs)} pending jobs")
-                    
+
+                    if self._should_run_readiness_before_jobs():
+                        self.run_keepalive_once(reason="pending_jobs")
+
                     # Process each job
                     for job in jobs:
                         self.run_job(job)
