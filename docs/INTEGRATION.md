@@ -232,4 +232,17 @@ Expected behavior for compatibility:
 - Accept JSON payload and return `200/201/202/204`.
 - If endpoint is absent (`404`), collector continues without failing job polling.
 
+**Payload fields (collector → platform):**
+
+| Field | Meaning |
+|--------|---------|
+| `collector_id`, `timestamp_utc`, `version` | Identity and deploy traceability (`COLLECTOR_VERSION`). |
+| `summary` | `ok` or `degraded` (collector-side roll-up). **`offline`** is determined on the platform when `server_received_at` is too old—collector cannot send it. |
+| `heartbeat_interval_sec` | Present when `COLLECTOR_HEALTH_INTERVAL > 0`; use for stale/fresh badges (not the default 300s fallback). |
+| `garmin.collection_ready` | Whether the next user collect can run without pre-warm. |
+| `garmin.last_error` | `kind` / `message` / `at_utc`; `kind` `none` or absent means no error. |
+| `keepalive.counters_24h`, `collections.counters_24h` | In-process rolling 24h windows; **reset when the collector process restarts**. For durable user-job history and wall-clock duration, query rehab-platform **`background_jobs`** (see handoff in [REHAB_PLATFORM_COLLECTOR_HEALTH_HANDOFF.md](REHAB_PLATFORM_COLLECTOR_HEALTH_HANDOFF.md)). |
+
 Field semantics and mini-itx operating notes (which counters matter, scheduled reseed vs failed jobs): [MAINTAINERS.md §6.5](MAINTAINERS.md#65-production-operations-session-readiness-health-mini-itx).
+
+**rehab-platform admin UX:** planned changes are specified in [REHAB_PLATFORM_COLLECTOR_HEALTH_HANDOFF.md](REHAB_PLATFORM_COLLECTOR_HEALTH_HANDOFF.md) for implementation in the rehab-platform repo.

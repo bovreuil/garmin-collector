@@ -162,7 +162,11 @@ Observed on **Windows mini-itx** with **`GARMIN_KEEPALIVE_INTERVAL=1800`**, **`G
 | **`collections.counters_24h.failed`** / **`slow_ge_10s`** | User-visible collect quality |
 | **`keepalive.counters_24h.failed`** | Background readiness hard failures |
 | **`version`** | Deploy traceability (git SHA from launcher) |
+| **`summary`** | `ok` / `degraded` roll-up (`collection_ready`, errors, failed counters) |
+| **`heartbeat_interval_sec`** | Match to `COLLECTOR_HEALTH_INTERVAL` for platform stale detection |
 | **`garmin.last_browser_reseed_utc`** | Last Playwright recovery |
+
+**`collections.counters_24h` / `keepalive.counters_24h`** are in-memory only and **reset on collector restart**; rehab-platform should use **`background_jobs`** for true 24h user collection stats (see [INTEGRATION.md](INTEGRATION.md) heartbeat section and [REHAB_PLATFORM_COLLECTOR_HEALTH_HANDOFF.md](REHAB_PLATFORM_COLLECTOR_HEALTH_HANDOFF.md)).
 
 Do **not** treat **`minutes_since_auth_refresh`** alone as “stale auth” when **`last_auth_refresh_utc`** is old but **`last_browser_reseed_utc`** is recent: **`last_auth_refresh_utc`** updates when **`di-oauth/refresh`** writes a newer **`garmin_tokens.json`**; browser reseed updates **`last_browser_reseed_utc`** instead. After a clean **`refreshed`** restart, both timestamps can be fresh.
 

@@ -346,6 +346,23 @@ class GarminCollector:
             return "warm"
         return "cold"
 
+    def _health_summary(
+        self,
+        *,
+        collection_ready: bool,
+        last_error_kind: Optional[str],
+        collections_failed_24h: int,
+        keepalive_failed_24h: int,
+    ) -> str:
+        """Roll-up status for rehab-platform admin (offline is server-side: no heartbeat)."""
+        if last_error_kind not in (None, "none"):
+            return "degraded"
+        if not collection_ready:
+            return "degraded"
+        if collections_failed_24h > 0 or keepalive_failed_24h > 0:
+            return "degraded"
+        return "ok"
+
     def _build_health_payload(self) -> Dict:
         self._trim_events_24h(self._keepalive_events)
         self._trim_events_24h(self._collection_events)
@@ -374,10 +391,20 @@ class GarminCollector:
                 time.time() + eta, tz=timezone.utc
             ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-        return {
+        collections_failed = int(collection_counts.get("failed", 0))
+        keepalive_failed = int(keepalive_counts.get("failed", 0))
+        summary = self._health_summary(
+            collection_ready=self._collection_ready,
+            last_error_kind=self._last_error.get("kind"),
+            collections_failed_24h=collections_failed,
+            keepalive_failed_24h=keepalive_failed,
+        )
+
+        payload: Dict = {
             "collector_id": self.collector_id,
             "timestamp_utc": self._now_utc(),
             "version": os.getenv("COLLECTOR_VERSION", "unknown"),
+            "summary": summary,
             "garmin": {
                 "session_state": self._garmin_session_state(),
                 "collection_ready": self._collection_ready,
@@ -415,6 +442,9 @@ class GarminCollector:
                 "current_task": self._current_task,
             },
         }
+        if self.health_interval > 0:
+            payload["heartbeat_interval_sec"] = self.health_interval
+        return payload
 
     def send_health_heartbeat(self, *, force: bool = False) -> None:
         if self.health_interval <= 0:
