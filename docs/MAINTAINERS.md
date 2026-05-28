@@ -87,6 +87,7 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 | `COLLECTOR_HEALTH_INTERVAL` | Seconds between collector health heartbeats to rehab-platform (`0` disables). |
 | `COLLECTOR_HEALTH_ENDPOINT` | Relative path for heartbeat POST JSON payloads (default `/api/collector/health`; `404` is tolerated). |
 | `COLLECTOR_ID` | Optional stable identifier included in heartbeat payloads (defaults to hostname). |
+| `COLLECTOR_VERSION` | Optional string in heartbeat `version` (default **`unknown`**). Set at process start (e.g. git short SHA in `start-garmin-collector.bat`); not required in `.env` if the launcher exports it. |
 
 `GARMINTOKENS` is temporarily **removed** from the environment around `api.login` inside the collector so the library resolves the path argument explicitly (avoids double-application of env defaults).
 
@@ -138,6 +139,44 @@ This section lists **real failures** seen in production/dev (March 2026) and how
 2. If **browser never opens** on recovery, see **`GARMIN_BROWSER_LOGIN`** / TTY notes in **§4** and `env.example`.
 3. If failures persist after token reseed, check **home IP / VPN**, Garmin account status, and `garmin-login-debug.png` from Playwright.
 
+### 6.5 Production operations (session readiness, health, mini-itx)
+
+Observed on **Windows mini-itx** with **`GARMIN_KEEPALIVE_INTERVAL=1800`**, **`GARMIN_KEEPALIVE_POSTPONE_AFTER_COLLECT_SEC=900`**, **`POLL_INTERVAL=5`**, **`GARMIN_BROWSER_LOGIN=1`** (May 2026, post session-readiness deploy). Use this when interpreting logs and rehab-platform admin health cards—not as a guarantee Garmin behaviour never changes.
+
+**Steady state (healthy):**
+
+- User **`collect_data`** jobs complete in a few seconds end-to-end; heartbeat **`collections.counters_24h`**: high **`fast_lt_10s`**, **`failed: 0`**.
+- **`garmin.collection_ready: true`**, **`session_state: warm`** between checks.
+- Scheduled readiness often logs **`Session readiness ok`** or **`refreshed`** (~4s). **`reseeded`** (~35–45s, Playwright) on some cycles is **normal** if the next user job is still fast.
+
+**Scheduled 401 on `dailyHeartRate` (~every 30 minutes):**
+
+- Background **`reason=scheduled`** readiness may log **`API Error 401`** on **`/wellness-service/wellness/dailyHeartRate/…`**, clear tokens, and run Playwright. That is **background churn**, not a failed collection, as long as jobs keep completing and **`keepalive.counters_24h.failed`** stays **0**.
+- **`keepalive.counters_24h.reseeded`** can be a large fraction of **`runs`**; **`refreshed: 0`** is common when recovery is almost always browser reseed rather than in-place **`di-oauth/refresh`** updating token file mtime.
+
+**Health payload — what to trust:**
+
+| Field | Use for |
+|-------|---------|
+| **`garmin.collection_ready`** | Can the next job run without pre-warm? |
+| **`collections.counters_24h.failed`** / **`slow_ge_10s`** | User-visible collect quality |
+| **`keepalive.counters_24h.failed`** | Background readiness hard failures |
+| **`version`** | Deploy traceability (git SHA from launcher) |
+| **`garmin.last_browser_reseed_utc`** | Last Playwright recovery |
+
+Do **not** treat **`minutes_since_auth_refresh`** alone as “stale auth” when **`last_auth_refresh_utc`** is old but **`last_browser_reseed_utc`** is recent: **`last_auth_refresh_utc`** updates when **`di-oauth/refresh`** writes a newer **`garmin_tokens.json`**; browser reseed updates **`last_browser_reseed_utc`** instead. After a clean **`refreshed`** restart, both timestamps can be fresh.
+
+**`garmin_lock_held: true`** with **`current_task: idle`** can appear on a heartbeat emitted from **`run_job`**’s **`finally`** while the lock is still held—timing snapshot, not a stuck lock.
+
+**User wait time vs platform `created_at` → `updated_at`:**
+
+- The poll loop runs **scheduled readiness first** (when due), then **`poll_for_jobs`**. Readiness and **`run_job`** share **`_garmin_lock`**.
+- If a job is created while a **scheduled** reseed is in progress (~30–45s), the job may sit **pending** until that iteration finishes; collection itself is still fast once **`running`**. Example: ~36s **`user_time`** with logs showing **`Session readiness reseeded`** immediately before **`Found N pending jobs`**. Acceptable occasional collision; investigate only if long waits are **frequent**.
+
+**Deploy version (`COLLECTOR_VERSION`):**
+
+- Heartbeat defaults to **`unknown`** if unset. Recommended: set in **`start-garmin-collector.bat`** from **`git rev-parse --short HEAD`** (requires **`git`** on Task Scheduler **PATH**). Restart the collector after **`git pull`** so the new process picks up the SHA. Optional override in **`.env`** is rarely needed.
+
 ### 6.4 Debugging persistent **`socialProfile` / gc-api 403** (browser vs Python)
 
 Avoid changing headers or hosts ad hoc until you have **one** failing request compared in both stacks.
@@ -161,13 +200,13 @@ Avoid changing headers or hosts ad hoc until you have **one** failing request co
 2. Delete or keep `garmin_tokens.json` depending on what you are testing (fresh login vs reuse).
 3. `python collector.py --poll` with a pending job; confirm logs show token reuse on later jobs, and platform job `completed` or a clear `failed` + `error_message`.
 4. Optional: `python scripts/garmin_playwright_login.py --verify` after dependency changes.
-5. If heartbeat is enabled, confirm rehab-platform receives collector health payloads (session state, keepalive counters, fast/slow collection stats) at `COLLECTOR_HEALTH_ENDPOINT`.
+5. If heartbeat is enabled, confirm rehab-platform receives collector health payloads (session state, keepalive counters, fast/slow collection stats) at `COLLECTOR_HEALTH_ENDPOINT`, and **`version`** is not **`unknown`** when using the production launcher (see **§6.5**).
 
 ---
 
 ## 8. Investigation history (short)
 
-March 2026: **429** on Garth/SSO and on **`react`** `mobile/api/login` for this account; waiting and network changes did not restore programmatic login. **Browser** login remained viable. Response: ship Playwright seeding, JWT persistence, collector auto-fallback, faster post-login polling in the script (no fixed 45s wait on empty `di-oauth` JSON). Older dated logs and SHAs were in a handoff doc; **this file** is the living substitute.
+March 2026: **429** on Garth/SSO and on **`react`** `mobile/api/login` for this account; waiting and network changes did not restore programmatic login. **Browser** login remained viable. Response: ship Playwright seeding, JWT persistence, collector auto-fallback, faster post-login polling in the script (no fixed 45s wait on empty `di-oauth` JSON). **May 2026:** session readiness (keepalive refactor) on mini-itx: user collects stay sub-10s; scheduled **401** → Playwright reseed ~every 30m in background is noisy but self-healing (**§6.5**). Older dated logs and SHAs were in a handoff doc; **this file** is the living substitute.
 
 **If this stack breaks again:** see [GARMIN_AUTH_LANDSCAPE.md — When the current stack stops working](GARMIN_AUTH_LANDSCAPE.md#when-the-current-stack-stops-working-contingency-checklist) (upstream sync order, issue links, and **browser-only / webhook** alternatives such as [garmin-data-bridge](https://github.com/Flo976/garmin-data-bridge)).
 

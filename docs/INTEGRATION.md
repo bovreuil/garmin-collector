@@ -231,3 +231,5 @@ Expected behavior for compatibility:
 
 - Accept JSON payload and return `200/201/202/204`.
 - If endpoint is absent (`404`), collector continues without failing job polling.
+
+Field semantics and mini-itx operating notes (which counters matter, scheduled reseed vs failed jobs): [MAINTAINERS.md §6.5](MAINTAINERS.md#65-production-operations-session-readiness-health-mini-itx).

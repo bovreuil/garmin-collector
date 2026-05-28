@@ -191,26 +191,40 @@ This collector is designed to run on a local machine (like your Windows 11 mini-
    ```
 
 3. **Configure Environment**:
-   Create **`C:\Users\Pete\garmin-collector\.env`** (same folder as `collector.py` so `python-dotenv` loads it when the batch file `cd`s into the repo). At minimum:
+   Create **`C:\Users\Pete\garmin-collector\.env`** (same folder as `collector.py` so `python-dotenv` loads it when the batch file `cd`s into the repo). See **`env.example`** / a prod template such as **`env.prod`** for keepalive and health knobs. At minimum:
    ```env
    GARMIN_EMAIL=
    GARMIN_PASSWORD=
    REHAB_PLATFORM_URL=
    SHARED_SECRET=
-   POLL_INTERVAL=30
+   POLL_INTERVAL=5
+
+   GARMIN_KEEPALIVE_INTERVAL=1800
+   GARMIN_KEEPALIVE_POSTPONE_AFTER_COLLECT_SEC=900
+   GARMIN_SESSION_STALE_SEC=1200
+   COLLECTOR_HEALTH_INTERVAL=60
+   COLLECTOR_ID=mini-itx-prod
 
    # Required for Task Scheduler + .bat: no interactive terminal → browser recovery is off unless set
    GARMIN_BROWSER_LOGIN=1
+   GARMIN_PLAYWRIGHT_CHROME=1
    ```
    Without **`GARMIN_BROWSER_LOGIN=1`**, the collector assumes it may only auto-launch Playwright when **stdin is a TTY**. A typical **“At log on”** task that **starts a program** (`start-garmin-collector.bat`) does **not** provide a TTY, so **429 / expired-token recovery would skip the browser** and jobs could fail until you run `scripts/garmin_playwright_login.py` manually.
 
 4. **Create Startup Script**:
-   Example: `C:\Users\Pete\scripts\start-garmin-collector.bat`:
+   Example: `C:\Users\Pete\scripts\start-garmin-collector.bat` (sets **`COLLECTOR_VERSION`** from git for admin health payloads; **`git`** must be on PATH for the task user):
    ```batch
-   cd C:\Users\Pete\garmin-collector
+   @echo off
+   cd /d C:\Users\Pete\garmin-collector
+
+   for /f %%i in ('git rev-parse --short HEAD 2^>nul') do set COLLECTOR_VERSION=%%i
+   if not defined COLLECTOR_VERSION set COLLECTOR_VERSION=unknown
+
    python collector.py --poll
    ```
-   The **`cd`** line is important so `.env` and `GARMINTOKENS` resolve next to the clone.
+   The **`cd /d`** line is important so `.env` and `GARMINTOKENS` resolve next to the clone. Restart the scheduled task after **`git pull`** so heartbeats show the new SHA.
+
+   **Interpreting prod logs and health cards:** scheduled **`Session readiness reseeded`** (~30–45s) about every 30 minutes with **`API Error 401`** on **`dailyHeartRate`** in the background is expected on mini-itx; user jobs should still finish in seconds. See [docs/MAINTAINERS.md](docs/MAINTAINERS.md) **§6.5**.
 
 5. **Set Up Windows Scheduled Task** (example matching a mini-ITX setup):
    - **Trigger:** **At log on** (after Windows auto-logs in the collector user).
