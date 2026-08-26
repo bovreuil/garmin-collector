@@ -177,7 +177,7 @@ Do **not** treat **`minutes_since_auth_refresh`** alone as “stale auth” when
 
 - Playwright skips SSO because **`.garmin-browser-profile`** looks signed in, but Garmin’s refresh endpoint returns **500** → no **`garmin_tokens.json`** → **`collection_ready: false`** → user jobs fail (~3 min Playwright timeout each).
 - **Recovery:** stop collector; rename **`.garmin-browser-profile`**; run **`python scripts/garmin_playwright_login.py --verify --chrome`** (or **`--manual`**). Restart collector.
-- **Code behaviour (post-hardening):** collector automated reseeds use **`--force-sso`** immediately (skip the “already signed in” shortcut that often wastes ~3 min on **di-oauth HTTP 500**); **`GARMIN_BROWSER_RESEED_COOLDOWN_SEC`** (default **1800**) after failure so jobs **fail fast** instead of launching Playwright per job.
+- **Code behaviour (post-hardening):** collector automated reseeds use **`--force-sso`** immediately (skip the “already signed in” shortcut that often wastes ~3 min on **di-oauth HTTP 500**); **`GARMIN_BROWSER_RESEED_COOLDOWN_SEC`** (default **1800**) after failure so jobs **fail fast** instead of launching Playwright per job. **Navigation redirect races** during force-SSO logout (Playwright “interrupted by another navigation”) are retried without cooldown — sign-in often still loads.
 
 **User wait time vs platform `created_at` → `updated_at`:**
 

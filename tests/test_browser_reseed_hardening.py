@@ -10,6 +10,7 @@ import pytest
 from collector import (
     GarminCollector,
     GarminConnectConnectionError,
+    _playwright_stderr_is_transient_nav_failure,
 )
 
 
@@ -24,6 +25,15 @@ def collector(monkeypatch: pytest.MonkeyPatch) -> GarminCollector:
     return GarminCollector("http://example.com", "shared-secret")
 
 
+def test_transient_nav_failure_detected_from_stderr() -> None:
+    stderr = (
+        "Page.goto: Navigation to portal sign-in is interrupted by another navigation "
+        "to https://connect.garmin.com/signin/"
+    )
+    assert _playwright_stderr_is_transient_nav_failure(stderr) is True
+    assert _playwright_stderr_is_transient_nav_failure("di-oauth/refresh: HTTP 500") is False
+
+
 def test_invoke_playwright_sets_cooldown_on_failure(collector: GarminCollector) -> None:
     fail = MagicMock(returncode=1, stdout="", stderr="di-oauth/refresh: HTTP 500")
     with patch("collector._PLAYWRIGHT_SCRIPT") as script:
@@ -32,6 +42,20 @@ def test_invoke_playwright_sets_cooldown_on_failure(collector: GarminCollector) 
             with pytest.raises(GarminConnectConnectionError):
                 collector._invoke_playwright_seeding(force_sso=True)
     assert collector._browser_reseed_in_cooldown()
+
+
+def test_invoke_playwright_no_cooldown_on_transient_nav(collector: GarminCollector) -> None:
+    stderr = (
+        "Page.goto: Navigation interrupted by another navigation to "
+        "https://connect.garmin.com/signin/"
+    )
+    fail = MagicMock(returncode=1, stdout="", stderr=stderr)
+    with patch("collector._PLAYWRIGHT_SCRIPT") as script:
+        script.is_file.return_value = True
+        with patch("collector.subprocess.run", return_value=fail):
+            with pytest.raises(GarminConnectConnectionError, match="redirect"):
+                collector._invoke_playwright_seeding(force_sso=True)
+    assert not collector._browser_reseed_in_cooldown()
 
 
 def test_invoke_playwright_skipped_during_cooldown(collector: GarminCollector) -> None:

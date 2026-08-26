@@ -41,6 +41,10 @@ from garminconnect.client import Client
 _LOGGER = logging.getLogger(__name__)
 
 _CONNECT_URL_RE = re.compile(r".*connect\.garmin\.com.*", re.I)
+_SSO_SIGNIN_URL_RE = re.compile(
+    r"(sso\.garmin\.com.*sign-in|connect\.garmin\.com/signin)",
+    re.I,
+)
 
 # Navigate here after SSO; gc-api/di-oauth Referer matches client.py (app shell, not /modern/).
 _CONNECT_APP_HOME = "https://connect.garmin.com/app/home"
@@ -182,20 +186,68 @@ def _on_connect_app(page: Any) -> bool:
     return bool(_CONNECT_URL_RE.search(page.url))
 
 
+def _on_sso_signin_page(page: Any) -> bool:
+    return bool(_SSO_SIGNIN_URL_RE.search(page.url))
+
+
+def _goto_tolerant(
+    page: Any,
+    url: str,
+    *,
+    wait_until: str = "domcontentloaded",
+    timeout: float = 120_000,
+) -> None:
+    """Navigate; treat redirect races (interrupted goto) as success when a sign-in page loads."""
+    try:
+        page.goto(url, wait_until=wait_until, timeout=timeout)
+    except Exception as e:  # noqa: BLE001
+        msg = str(e).lower()
+        if "interrupted" not in msg and "navigation" not in msg:
+            raise
+        _LOGGER.info("Navigation redirect during goto (continuing): %s", e)
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=30_000)
+        except Exception:  # noqa: BLE001
+            pass
+    if _on_sso_signin_page(page) or _on_connect_app(page):
+        return
+    if _sso_form_visible(page, timeout_ms=3000):
+        return
+    time.sleep(0.5)
+
+
 def _navigate_to_fresh_sso(page: Any) -> None:
     """Sign out of Connect/SSO so a stale persistent profile must re-authenticate."""
     _LOGGER.info("Force SSO: clearing Connect session before sign-in")
-    for url in (
-        "https://connect.garmin.com/modern/logout",
-        "https://sso.garmin.com/portal/sso/en-US/logout?clientId=GarminConnect",
-    ):
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-            time.sleep(0.8)
-        except Exception as e:  # noqa: BLE001
-            _LOGGER.debug("Logout navigate %s: %s", url, e)
-    page.goto(_PORTAL_SIGNIN, wait_until="load", timeout=120_000)
-    time.sleep(1.0)
+    # One logout only — chaining SSO logout + portal sign-in races redirects on Chrome.
+    try:
+        _goto_tolerant(
+            page,
+            "https://connect.garmin.com/modern/logout",
+            timeout=45_000,
+        )
+        time.sleep(1.0)
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.debug("Connect logout: %s", e)
+
+    if _on_sso_signin_page(page) or _sso_form_visible(page, timeout_ms=5000):
+        _LOGGER.info("Force SSO: sign-in page ready after logout")
+        return
+
+    _goto_tolerant(page, _PORTAL_SIGNIN, timeout=120_000)
+    time.sleep(0.8)
+
+    if _on_sso_signin_page(page) or _sso_form_visible(page, timeout_ms=5000):
+        return
+
+    # Prod redirect target when portal sign-in is interrupted (Aug 2026 mini-itx).
+    connect_signin = (
+        "https://connect.garmin.com/signin/"
+        "?service=https%3A%2F%2Fconnect.garmin.com%2Fapp%2Fhome"
+    )
+    _LOGGER.info("Force SSO: opening Connect sign-in URL")
+    _goto_tolerant(page, connect_signin, timeout=120_000)
+    time.sleep(0.8)
 
 
 def _check_remember_me(page: Any) -> None:
@@ -956,7 +1008,7 @@ def run_login(
                 _MODERN_ENTRY if entry == "modern" else _PORTAL_SIGNIN
             )
             _LOGGER.info("Opening %s", start_url)
-            page.goto(start_url, wait_until="load", timeout=120000)
+            _goto_tolerant(page, start_url, wait_until="load", timeout=120_000)
             time.sleep(1.2)
 
         for sel in (

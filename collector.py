@@ -133,6 +133,16 @@ def _transient_garmin_network_error(exc: BaseException) -> bool:
     )
 
 
+def _playwright_stderr_is_transient_nav_failure(stderr: str) -> bool:
+    """Playwright goto interrupted by SSO redirect — not a stale-profile/di-oauth failure."""
+    if not stderr:
+        return False
+    s = stderr.lower()
+    return "interrupted by another navigation" in s or (
+        "page.goto:" in s and "navigation" in s
+    )
+
+
 class GarminCollector:
     """Handles Garmin data collection and job processing."""
     
@@ -296,6 +306,16 @@ class GarminCollector:
         if result.returncode != 0:
             if result.stderr:
                 logger.error("Browser login stderr:\n%s", result.stderr[-4000:])
+            if _playwright_stderr_is_transient_nav_failure(result.stderr or ""):
+                logger.warning(
+                    "Browser login failed on navigation redirect race (no reseed cooldown)"
+                )
+                raise GarminConnectConnectionError(
+                    "Browser login helper exited with code "
+                    f"{result.returncode} (SSO navigation redirect). "
+                    "Retry shortly or run: python scripts/garmin_playwright_login.py "
+                    "--verify --chrome --force-sso"
+                )
             self._mark_browser_reseed_failed()
             raise GarminConnectConnectionError(
                 "Browser login helper exited with code "
