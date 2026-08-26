@@ -201,7 +201,7 @@ install = "pdm install --group :all"
 format = {composite = ["pdm run ruff check . --fix --unsafe-fixes", "pdm run isort . --skip-gitignore", "pdm run black -l 88 ."]}
 lint = {composite = ["pdm run isort --check-only . --skip-gitignore", "pdm run ruff check .", "pdm run black -l 88 . --check --diff", "pdm run mypy garminconnect tests"]}
 # Collector unit tests only (canonical verify for agents and CI). Upstream VCR suite: pdm run test-vcr
-test = {cmd = "pdm run coverage run -m pytest -v --durations=10 tests/test_client_token_file.py tests/test_health_payload.py tests/test_keepalive_network.py tests/test_playwright_chrome_default.py tests/test_session_readiness.py"}
+test = {cmd = "pdm run coverage run -m pytest -v --durations=10 tests/test_browser_reseed_hardening.py tests/test_client_token_file.py tests/test_health_payload.py tests/test_keepalive_network.py tests/test_playwright_chrome_default.py tests/test_session_readiness.py"}
 test-vcr = {cmd = "pdm run pytest tests/test_garmin.py -v --tb=short --vcr-record=none"}
 testcov = {composite = ["test", "pdm run coverage html", "pdm run coverage xml -o coverage/coverage.xml"]}
 codespell = "pre-commit run codespell --all-files"

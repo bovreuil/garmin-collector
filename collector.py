@@ -133,6 +133,19 @@ def _transient_garmin_network_error(exc: BaseException) -> bool:
     )
 
 
+def _playwright_failure_suggests_stale_profile(stderr: str) -> bool:
+    """True when Playwright failed on di-oauth/refresh or could not export JWT (Aug 2026 prod pattern)."""
+    if not stderr:
+        return False
+    s = stderr.lower()
+    return (
+        "http 500" in s
+        or "could not obtain jwt" in s
+        or ("di-oauth/refresh" in s and "refresh failed" in s)
+        or "persistent profile already signed in" in s
+    )
+
+
 class GarminCollector:
     """Handles Garmin data collection and job processing."""
     
@@ -197,6 +210,11 @@ class GarminCollector:
         self._collection_ready = False
         self._last_collection_probe_utc: Optional[str] = None
 
+        self.browser_reseed_cooldown_sec = int(
+            os.getenv("GARMIN_BROWSER_RESEED_COOLDOWN_SEC", "1800")
+        )
+        self._browser_reseed_cooldown_until_monotonic = 0.0
+
         logger.info("Garmin token storage directory: %s", self._tokenstore_path)
         if self.keepalive_interval > 0:
             logger.info("Garmin keepalive enabled every %ss", self.keepalive_interval)
@@ -216,6 +234,37 @@ class GarminCollector:
         except OSError as err:
             logger.warning("Could not remove token file %s: %s", p, err)
 
+    def _browser_reseed_in_cooldown(self) -> bool:
+        return time.monotonic() < self._browser_reseed_cooldown_until_monotonic
+
+    def _browser_reseed_cooldown_remaining_sec(self) -> int:
+        return max(int(self._browser_reseed_cooldown_until_monotonic - time.monotonic()), 0)
+
+    def _mark_browser_reseed_failed(self) -> None:
+        if self.browser_reseed_cooldown_sec <= 0:
+            return
+        self._browser_reseed_cooldown_until_monotonic = (
+            time.monotonic() + self.browser_reseed_cooldown_sec
+        )
+        logger.warning(
+            "Browser reseed failed; suppressing automated retries for %ss",
+            self.browser_reseed_cooldown_sec,
+        )
+
+    def _clear_browser_reseed_cooldown(self) -> None:
+        self._browser_reseed_cooldown_until_monotonic = 0.0
+
+    def _session_recovery_blocked(self) -> tuple[bool, Optional[str]]:
+        """Fail fast on jobs when session is down and Playwright is in post-failure cooldown."""
+        if self._collection_ready or not self._browser_reseed_in_cooldown():
+            return False, None
+        remaining = self._browser_reseed_cooldown_remaining_sec()
+        return True, (
+            "Garmin session not ready; browser reseed on cooldown after recent failure "
+            f"({remaining}s remaining). Wait for cooldown or run "
+            "scripts/garmin_playwright_login.py --verify manually."
+        )
+
     def _reseed_via_browser_after_token_clear(self, reason: str) -> None:
         """If browser seed is allowed, do it now and skip a password login that often returns 429."""
         if not _browser_login_enabled():
@@ -226,8 +275,14 @@ class GarminCollector:
         )
         self._invoke_playwright_seeding()
 
-    def _invoke_playwright_seeding(self) -> None:
+    def _invoke_playwright_seeding(self, *, force_sso: bool = False) -> None:
         """Run browser login helper; writes garmin_tokens.json under GARMINTOKENS."""
+        if self._browser_reseed_in_cooldown():
+            remaining = self._browser_reseed_cooldown_remaining_sec()
+            raise GarminConnectConnectionError(
+                "Browser reseed on cooldown after recent failure "
+                f"({remaining}s remaining). Run scripts/garmin_playwright_login.py manually."
+            )
         if not _PLAYWRIGHT_SCRIPT.is_file():
             raise FileNotFoundError(
                 f"Playwright helper missing: {_PLAYWRIGHT_SCRIPT}. "
@@ -237,6 +292,8 @@ class GarminCollector:
         cmd = [sys.executable, str(_PLAYWRIGHT_SCRIPT), "--verify"]
         if _playwright_use_chrome():
             cmd.append("--chrome")
+        if force_sso:
+            cmd.append("--force-sso")
         logger.info("Running browser login: %s", " ".join(cmd))
         result = subprocess.run(
             cmd,
@@ -252,11 +309,22 @@ class GarminCollector:
         if result.returncode != 0:
             if result.stderr:
                 logger.error("Browser login stderr:\n%s", result.stderr[-4000:])
+            if (
+                not force_sso
+                and _playwright_failure_suggests_stale_profile(result.stderr or "")
+            ):
+                logger.warning(
+                    "Browser login failed (likely stale profile or di-oauth HTTP 500); "
+                    "retrying once with --force-sso"
+                )
+                return self._invoke_playwright_seeding(force_sso=True)
+            self._mark_browser_reseed_failed()
             raise GarminConnectConnectionError(
                 "Browser login helper exited with code "
                 f"{result.returncode}. Install browser deps and run manually: "
                 "python scripts/garmin_playwright_login.py --verify"
             )
+        self._clear_browser_reseed_cooldown()
         self._last_browser_reseed_utc = self._now_utc()
 
     def _now_utc(self) -> str:
@@ -305,6 +373,8 @@ class GarminCollector:
         if time.monotonic() >= self._next_keepalive_monotonic:
             return True
         if not self._collection_ready:
+            if self._browser_reseed_in_cooldown():
+                return False
             return True
         if self._last_garmin_ok_utc is None:
             return True
@@ -613,6 +683,13 @@ class GarminCollector:
                 api.login(path_str)
             except GarminConnectTooManyRequestsError:
                 if allow_browser_fallback and _browser_login_enabled():
+                    if self._browser_reseed_in_cooldown():
+                        logger.warning(
+                            "Garmin SSO rate limited (429) on password login but browser "
+                            "reseed on cooldown (%ss remaining)",
+                            self._browser_reseed_cooldown_remaining_sec(),
+                        )
+                        raise
                     logger.warning(
                         "Garmin SSO rate limited (429) on password login. "
                         "Opening browser to seed tokens under %s",
@@ -636,6 +713,12 @@ class GarminCollector:
                     and _browser_login_enabled()
                     and ("429" in str(e) or "rate limit" in str(e).lower())
                 ):
+                    if self._browser_reseed_in_cooldown():
+                        logger.warning(
+                            "Garmin login rate limited but browser reseed on cooldown (%ss)",
+                            self._browser_reseed_cooldown_remaining_sec(),
+                        )
+                        raise
                     logger.warning(
                         "Garmin login failed with rate limit message; "
                         "trying browser seed under %s",
@@ -1309,7 +1392,19 @@ class GarminCollector:
         target_date = job.get('target_date')
         
         logger.info(f"Starting job {job_id} for date {target_date}")
-        
+
+        blocked, blocked_msg = self._session_recovery_blocked()
+        if blocked:
+            logger.error("Job %s skipped: %s", job_id, blocked_msg)
+            self.update_job_status(job_id, "failed", error_message=blocked_msg)
+            self._collection_last_run_utc = self._now_utc()
+            self._collection_last_duration_ms = 0
+            self._collection_last_result = "failed"
+            self._record_collection_event(0, "failed")
+            self._set_last_error("garmin_session_not_ready", blocked_msg)
+            self.send_health_heartbeat(force=True)
+            return
+
         # Update job status to running
         self.update_job_status(job_id, 'running')
         

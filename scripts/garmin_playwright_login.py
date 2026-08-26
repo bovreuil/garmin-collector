@@ -182,6 +182,22 @@ def _on_connect_app(page: Any) -> bool:
     return bool(_CONNECT_URL_RE.search(page.url))
 
 
+def _navigate_to_fresh_sso(page: Any) -> None:
+    """Sign out of Connect/SSO so a stale persistent profile must re-authenticate."""
+    _LOGGER.info("Force SSO: clearing Connect session before sign-in")
+    for url in (
+        "https://connect.garmin.com/modern/logout",
+        "https://sso.garmin.com/portal/sso/en-US/logout?clientId=GarminConnect",
+    ):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+            time.sleep(0.8)
+        except Exception as e:  # noqa: BLE001
+            _LOGGER.debug("Logout navigate %s: %s", url, e)
+    page.goto(_PORTAL_SIGNIN, wait_until="load", timeout=120_000)
+    time.sleep(1.0)
+
+
 def _check_remember_me(page: Any) -> None:
     """Tick SSO 'Remember Me' when present (longer-lived SSO cookies)."""
     if "sso.garmin.com" not in page.url and "sign-in" not in page.url.lower():
@@ -851,6 +867,7 @@ def run_login(
     manual: bool,
     no_submit: bool,
     profile_dir: Path | None,
+    force_sso: bool = False,
 ) -> Path:
     try:
         from playwright.sync_api import sync_playwright
@@ -931,10 +948,16 @@ def run_login(
 
         page.on("request", on_request)
 
-        start_url = _MODERN_ENTRY if entry == "modern" else _PORTAL_SIGNIN
-        _LOGGER.info("Opening %s", start_url)
-        page.goto(start_url, wait_until="load", timeout=120000)
-        time.sleep(1.2)
+        skipped_sso_shortcut = False
+        if force_sso and not manual:
+            _navigate_to_fresh_sso(page)
+        else:
+            start_url = _PORTAL_SIGNIN if force_sso else (
+                _MODERN_ENTRY if entry == "modern" else _PORTAL_SIGNIN
+            )
+            _LOGGER.info("Opening %s", start_url)
+            page.goto(start_url, wait_until="load", timeout=120000)
+            time.sleep(1.2)
 
         for sel in (
             "#onetrust-accept-btn-handler",
@@ -955,9 +978,26 @@ def run_login(
                     page, email, password, token_dir, no_submit=no_submit
                 )
             elif _on_connect_app(page):
-                _LOGGER.info(
-                    "Persistent profile already signed in; skipping SSO (exporting tokens)"
-                )
+                if force_sso:
+                    _LOGGER.info(
+                        "Force SSO: Connect loaded without SSO form; signing out and retrying portal"
+                    )
+                    _navigate_to_fresh_sso(page)
+                    if _sso_form_visible(page, timeout_ms=120_000):
+                        _fill_sso_and_maybe_submit(
+                            page, email, password, token_dir, no_submit=no_submit
+                        )
+                    else:
+                        dbg = _debug_shot(page, token_dir)
+                        raise RuntimeError(
+                            "Force SSO: portal sign-in did not appear after logout. "
+                            f"Screenshot: {dbg}"
+                        )
+                else:
+                    skipped_sso_shortcut = True
+                    _LOGGER.info(
+                        "Persistent profile already signed in; skipping SSO (exporting tokens)"
+                    )
             else:
                 _LOGGER.info("Waiting for SSO form or Connect redirect…")
                 try:
@@ -1098,6 +1138,24 @@ def run_login(
         )
 
     if not jwt or not csrf:
+        if skipped_sso_shortcut and not force_sso:
+            _LOGGER.warning(
+                "Token export failed after signed-in shortcut; retrying with force SSO"
+            )
+            _close_browser_context(browser, context)
+            return run_login(
+                email,
+                password,
+                token_dir,
+                headless=headless,
+                verify=verify,
+                use_chrome=use_chrome,
+                entry=entry,
+                manual=manual,
+                no_submit=no_submit,
+                profile_dir=profile_dir,
+                force_sso=True,
+            )
         raise RuntimeError(
             "Could not obtain JWT/csrf after browser login. "
             "If you reached Connect in the browser, inspect DevTools → Network for "
@@ -1179,6 +1237,11 @@ def main() -> None:
         action="store_true",
         help="Fresh browser context each run (no persistent profile)",
     )
+    parser.add_argument(
+        "--force-sso",
+        action="store_true",
+        help="Sign out and use portal SSO (skip 'already signed in' token export shortcut)",
+    )
     args = parser.parse_args()
 
     email = os.getenv("GARMIN_EMAIL", "")
@@ -1215,6 +1278,7 @@ def main() -> None:
             manual=args.manual,
             no_submit=args.no_submit,
             profile_dir=profile_dir,
+            force_sso=args.force_sso,
         )
     except Exception as e:
         _LOGGER.error("%s", e)

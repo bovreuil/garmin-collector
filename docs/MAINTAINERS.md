@@ -84,6 +84,7 @@ The collector runs on a **trusted machine** (dev laptop or home mini-ITX), polls
 | `GARMIN_PLAYWRIGHT_CHROME` | Use system Google Chrome for Playwright; **on Windows defaults to on** when unset. Set `0` to force Chromium. Use the **same** browser for manual `--chrome` seeding and collector recovery (shared `.garmin-browser-profile/`) |
 | `GARMIN_PLAYWRIGHT_PROFILE` | Persistent browser user-data dir (default `.garmin-browser-profile/`); `0`/`ephemeral` disables |
 | `GARMIN_PLAYWRIGHT_EPHEMERAL` | `1` = fresh context each run (no persistent profile) |
+| `GARMIN_BROWSER_RESEED_COOLDOWN_SEC` | After failed automated Playwright reseed, suppress further browser attempts (default **1800**; **`0`** disables). Jobs fail fast with a cooldown message while active. |
 | `COLLECTOR_HEALTH_INTERVAL` | Seconds between collector health heartbeats to rehab-platform (`0` disables). |
 | `COLLECTOR_HEALTH_ENDPOINT` | Relative path for heartbeat POST JSON payloads (default `/api/collector/health`; `404` is tolerated). |
 | `COLLECTOR_ID` | Optional stable identifier included in heartbeat payloads (defaults to hostname). |
@@ -171,6 +172,12 @@ Observed on **Windows mini-itx** with **`GARMIN_KEEPALIVE_INTERVAL=1800`**, **`G
 Do **not** treat **`minutes_since_auth_refresh`** alone as “stale auth” when **`last_auth_refresh_utc`** is old but **`last_browser_reseed_utc`** is recent: **`last_auth_refresh_utc`** updates when **`di-oauth/refresh`** writes a newer **`garmin_tokens.json`**; browser reseed updates **`last_browser_reseed_utc`** instead. After a clean **`refreshed`** restart, both timestamps can be fresh.
 
 **`garmin_lock_held: true`** with **`current_task: idle`** can appear on a heartbeat emitted from **`run_job`**’s **`finally`** while the lock is still held—timing snapshot, not a stuck lock.
+
+**`di-oauth/refresh` HTTP 500 after “Persistent profile already signed in” (Aug 2026):**
+
+- Playwright skips SSO because **`.garmin-browser-profile`** looks signed in, but Garmin’s refresh endpoint returns **500** → no **`garmin_tokens.json`** → **`collection_ready: false`** → user jobs fail (~3 min Playwright timeout each).
+- **Recovery:** stop collector; rename **`.garmin-browser-profile`**; run **`python scripts/garmin_playwright_login.py --verify --chrome`** (or **`--manual`**). Restart collector.
+- **Code behaviour (post-hardening):** collector retries Playwright once with **`--force-sso`** on this failure pattern; sets **`GARMIN_BROWSER_RESEED_COOLDOWN_SEC`** (default **1800**) after repeated failure so jobs **fail fast** instead of launching Playwright per job.
 
 **User wait time vs platform `created_at` → `updated_at`:**
 
