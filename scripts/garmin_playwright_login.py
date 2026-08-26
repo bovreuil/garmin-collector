@@ -41,6 +41,7 @@ from garminconnect.client import Client
 _LOGGER = logging.getLogger(__name__)
 
 _CONNECT_URL_RE = re.compile(r".*connect\.garmin\.com.*", re.I)
+_CONNECT_APP_URL_RE = re.compile(r"connect\.garmin\.com/(app|modern)/", re.I)
 _SSO_SIGNIN_URL_RE = re.compile(
     r"(sso\.garmin\.com.*sign-in|connect\.garmin\.com/signin)",
     re.I,
@@ -183,7 +184,10 @@ def _sso_form_visible(page: Any, *, timeout_ms: int = 5000) -> bool:
 
 
 def _on_connect_app(page: Any) -> bool:
-    return bool(_CONNECT_URL_RE.search(page.url))
+    """True on Connect dashboard (/app/ or /modern/), not SSO sign-in URLs."""
+    if _on_sso_signin_page(page):
+        return False
+    return bool(_CONNECT_APP_URL_RE.search(page.url))
 
 
 def _on_sso_signin_page(page: Any) -> bool:
@@ -1025,14 +1029,15 @@ def run_login(
                 pass
 
         if not manual:
-            if _sso_form_visible(page, timeout_ms=8000):
+            sso_wait_ms = 20_000 if force_sso else 8_000
+            if _sso_form_visible(page, timeout_ms=sso_wait_ms):
                 _fill_sso_and_maybe_submit(
                     page, email, password, token_dir, no_submit=no_submit
                 )
             elif _on_connect_app(page):
                 if force_sso:
                     _LOGGER.info(
-                        "Force SSO: Connect loaded without SSO form; signing out and retrying portal"
+                        "Force SSO: Connect app loaded without SSO form; signing out once"
                     )
                     _navigate_to_fresh_sso(page)
                     if _sso_form_visible(page, timeout_ms=120_000):
@@ -1042,7 +1047,7 @@ def run_login(
                     else:
                         dbg = _debug_shot(page, token_dir)
                         raise RuntimeError(
-                            "Force SSO: portal sign-in did not appear after logout. "
+                            "Force SSO: sign-in form did not appear after logout. "
                             f"Screenshot: {dbg}"
                         )
                 else:
