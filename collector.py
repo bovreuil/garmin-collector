@@ -133,19 +133,6 @@ def _transient_garmin_network_error(exc: BaseException) -> bool:
     )
 
 
-def _playwright_failure_suggests_stale_profile(stderr: str) -> bool:
-    """True when Playwright failed on di-oauth/refresh or could not export JWT (Aug 2026 prod pattern)."""
-    if not stderr:
-        return False
-    s = stderr.lower()
-    return (
-        "http 500" in s
-        or "could not obtain jwt" in s
-        or ("di-oauth/refresh" in s and "refresh failed" in s)
-        or "persistent profile already signed in" in s
-    )
-
-
 class GarminCollector:
     """Handles Garmin data collection and job processing."""
     
@@ -273,7 +260,7 @@ class GarminCollector:
             "Opening browser to seed tokens (%s); skipping programmatic login",
             reason,
         )
-        self._invoke_playwright_seeding()
+        self._invoke_playwright_seeding(force_sso=True)
 
     def _invoke_playwright_seeding(self, *, force_sso: bool = False) -> None:
         """Run browser login helper; writes garmin_tokens.json under GARMINTOKENS."""
@@ -309,15 +296,6 @@ class GarminCollector:
         if result.returncode != 0:
             if result.stderr:
                 logger.error("Browser login stderr:\n%s", result.stderr[-4000:])
-            if (
-                not force_sso
-                and _playwright_failure_suggests_stale_profile(result.stderr or "")
-            ):
-                logger.warning(
-                    "Browser login failed (likely stale profile or di-oauth HTTP 500); "
-                    "retrying once with --force-sso"
-                )
-                return self._invoke_playwright_seeding(force_sso=True)
             self._mark_browser_reseed_failed()
             raise GarminConnectConnectionError(
                 "Browser login helper exited with code "
@@ -695,7 +673,7 @@ class GarminCollector:
                         "Opening browser to seed tokens under %s",
                         path_str,
                     )
-                    self._invoke_playwright_seeding()
+                    self._invoke_playwright_seeding(force_sso=True)
                     return self._perform_garmin_login_once(
                         allow_browser_fallback=False
                     )
@@ -724,7 +702,7 @@ class GarminCollector:
                         "trying browser seed under %s",
                         path_str,
                     )
-                    self._invoke_playwright_seeding()
+                    self._invoke_playwright_seeding(force_sso=True)
                     return self._perform_garmin_login_once(
                         allow_browser_fallback=False
                     )

@@ -1138,29 +1138,11 @@ def run_login(
         )
 
     if not jwt or not csrf:
-        if skipped_sso_shortcut and not force_sso:
-            _LOGGER.warning(
-                "Token export failed after signed-in shortcut; retrying with force SSO"
-            )
-            _close_browser_context(browser, context)
-            return run_login(
-                email,
-                password,
-                token_dir,
-                headless=headless,
-                verify=verify,
-                use_chrome=use_chrome,
-                entry=entry,
-                manual=manual,
-                no_submit=no_submit,
-                profile_dir=profile_dir,
-                force_sso=True,
-            )
         raise RuntimeError(
             "Could not obtain JWT/csrf after browser login. "
             "If you reached Connect in the browser, inspect DevTools → Network for "
             "POST services/auth/token/di-oauth/refresh. Otherwise try --chrome, --manual, "
-            "or --no-submit."
+            "--force-sso, or --no-submit."
         )
 
     client = _apply_tokens_to_client(

@@ -10,7 +10,6 @@ import pytest
 from collector import (
     GarminCollector,
     GarminConnectConnectionError,
-    _playwright_failure_suggests_stale_profile,
 )
 
 
@@ -23,22 +22,6 @@ def collector(monkeypatch: pytest.MonkeyPatch) -> GarminCollector:
     monkeypatch.setenv("GARMIN_BROWSER_RESEED_COOLDOWN_SEC", "900")
     monkeypatch.setenv("GARMIN_BROWSER_LOGIN", "1")
     return GarminCollector("http://example.com", "shared-secret")
-
-
-@pytest.mark.parametrize(
-    "stderr,expected",
-    [
-        ("In-page di-oauth/refresh: HTTP 500\nRefresh failed", True),
-        ("Could not obtain JWT/csrf after browser login", True),
-        (
-            "Persistent profile already signed in; skipping SSO\nHTTP 500",
-            True,
-        ),
-        ("Browser deps missing", False),
-    ],
-)
-def test_playwright_failure_suggests_stale_profile(stderr: str, expected: bool) -> None:
-    assert _playwright_failure_suggests_stale_profile(stderr) is expected
 
 
 def test_invoke_playwright_sets_cooldown_on_failure(collector: GarminCollector) -> None:
@@ -57,15 +40,24 @@ def test_invoke_playwright_skipped_during_cooldown(collector: GarminCollector) -
         collector._invoke_playwright_seeding()
 
 
-def test_invoke_playwright_retries_force_sso_on_500(collector: GarminCollector) -> None:
-    fail = MagicMock(returncode=1, stdout="", stderr="In-page di-oauth/refresh: HTTP 500")
-    ok = MagicMock(returncode=0, stdout="OK", stderr="")
-    with patch("collector._PLAYWRIGHT_SCRIPT") as script:
-        script.is_file.return_value = True
-        with patch("collector.subprocess.run", side_effect=[fail, ok]) as run:
-            collector._invoke_playwright_seeding()
-    assert run.call_count == 2
-    assert "--force-sso" in run.call_args_list[1].args[0]
+def test_reseed_after_token_clear_uses_force_sso(collector: GarminCollector) -> None:
+    with patch.object(collector, "_invoke_playwright_seeding") as invoke:
+        collector._reseed_via_browser_after_token_clear("test reason")
+    invoke.assert_called_once_with(force_sso=True)
+
+
+def test_perform_garmin_login_429_invokes_force_sso(collector: GarminCollector) -> None:
+    from garminconnect import GarminConnectTooManyRequestsError
+
+    first_api = MagicMock()
+    second_api = MagicMock()
+    first_api.login.side_effect = GarminConnectTooManyRequestsError("429")
+
+    with patch("collector.Garmin", side_effect=[first_api, second_api]):
+        with patch.object(collector, "_invoke_playwright_seeding") as invoke:
+            result = collector._perform_garmin_login_once(allow_browser_fallback=True)
+    invoke.assert_called_once_with(force_sso=True)
+    assert result is second_api
 
 
 def test_should_not_run_readiness_when_cooldown_and_not_ready(
